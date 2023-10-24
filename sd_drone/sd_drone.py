@@ -1,6 +1,9 @@
 import json
 import socket
 
+REGISTRY_HOST = 'localhost'
+REGISTRY_PORT = 9020
+
 class Drone:
     def __init__(self, identifier, alias):
         self.identifier = identifier
@@ -32,6 +35,32 @@ class Drone:
         # Enviar la información
         # TODO
 
+    def register(self):
+        try:
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.connect((REGISTRY_HOST, REGISTRY_PORT))
+
+            message = json.dumps({
+                "operation": "register",
+                "identifier": self.identifier,
+                "alias": self.alias
+            })
+            server.send(message.encode("utf-8"))
+
+            response = server.recv(1024).decode("utf-8")
+            response = json.loads(response)
+
+            server.close()
+
+            if response["accepted"]:
+                self.token = response["token"]
+                return True
+            return False
+
+        except Exception as e:
+            server.close()
+            raise e
+
 def get_direction(a, b):
     d = b - a
 
@@ -41,9 +70,6 @@ def get_direction(a, b):
         return -1
     return 0
 
-# Pruebas
 if __name__ == "__main__":
-    drone = Drone(0, "dron")
-    print(str(drone))
-    drone.step_toward(5, 5)
-    print(str(drone))
+    drone = Drone(0, "dron0")
+    print(drone.register())

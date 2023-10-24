@@ -9,12 +9,12 @@ PORT = 9020
 DATA = "registry.db"
 
 class Database:
-    def __init__(self):
-        pass
+    def __init__(self, direction):
+        self.direction = direction
 
     def get_drone(self, identifier) -> dict:
         try:
-            with sqlite3.connect(DATA) as con:
+            with sqlite3.connect(self.direction) as con:
                 result = con.cursor().execute(f"SELECT * FROM Registry WHERE identifier = {identifier};").fetchone()
 
                 if result is None:
@@ -25,37 +25,41 @@ class Database:
                     "token": result[2]
                 }
         except Exception as e:
-            raise e
+            print(str(e))
+            return None
 
     def delete_drone(self, identifier) -> bool:
         try:
-            with sqlite3.connect(DATA) as con:
+            with sqlite3.connect(self.direction) as con:
                 cur = con.cursor()
                 cur.execute(f"DELETE FROM Registry WHERE identifier = {identifier};")
                 con.commit()
                 return cur.rowcount > 0
         except Exception as e:
-            raise e
+            print(str(e))
+            return False
 
     def insert_drone(self, identifier, alias, token) -> bool:
         try:
-            with sqlite3.connect(DATA) as con:
+            with sqlite3.connect(self.direction) as con:
                 cur = con.cursor()
                 cur.execute(f"INSERT INTO Registry (identifier, alias, token) VALUES ({identifier}, '{alias}', '{token}');")
                 con.commit()
                 return cur.rowcount > 0
         except Exception as e:
-            raise e
+            print(str(e))
+            return False
 
-    def modify_drone(self, identifier, alias, token) -> bool:
+    def modify_drone(self, identifier, alias) -> bool:
         try:
-            with sqlite3.connect(DATA) as con:
+            with sqlite3.connect(self.direction) as con:
                 cur = con.cursor()
-                cur.execute(f"UPDATE Registry SET alias = '{alias}', token = '{token}' WHERE identifier = {identifier};")
+                cur.execute(f"UPDATE Registry SET alias = '{alias}' WHERE identifier = {identifier};")
                 con.commit()
                 return cur.rowcount > 0
         except Exception as e:
-            raise e
+            print(str(e))
+            return False
 
 class Registry:
     def __init__(self):
@@ -67,7 +71,7 @@ class Registry:
         except Exception as e:
             raise e
 
-        self.database = Database()
+        self.database = Database(DATA)
         self.lock = threading.Lock()
 
     def start(self):
@@ -82,34 +86,35 @@ class Registry:
         client_socket, client_adress = self.socket.accept()
 
         with self.lock:
-            data = client_socket.recv(1024).decode("utf-8").loads()
+            data = json.loads(client_socket.recv(1024).decode("utf-8"))
             status = False
             token = None
 
-            print(f"Request received from {client_adress}")
+            print(f"Request received from {client_adress[0]}:{client_adress[1]}")
 
             try:
                 if data["operation"] == "register":
                     # Registrar a un nuevo dron
-                    if database.insert_drone(data["identifier"], data["alias"], data["token"]):
-                        token = str(uuid.uuid4())
+                    token = str(uuid.uuid4())
+                    if self.database.insert_drone(data["identifier"], data["alias"], token):
                         status = True
                 elif data["operation"] == "delete":
                     # Borrar un dron existente
-                    status = database.delete_drone(data["identifier"])
+                    status = self.database.delete_drone(data["identifier"])
                 elif data["operation"] == "modify":
                     # Modificar un dron existente
-                    status = database.modify_drone(data["identifier"], data["alias"], data["token"])
+                    status = self.database.modify_drone(data["identifier"], data["alias"])
 
                 response = {
                     "accepted": status,
                     "token": token
                 }
                 client_socket.send(json.dumps(response).encode("utf-8"))
-                client.socket.close()
+                client_socket.close()
 
             except Exception as e:
                 raise e
 
 if __name__ == "__main__":
-    registry = Registry().start()
+    registry = Registry()
+    registry.start()
