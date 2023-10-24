@@ -4,19 +4,9 @@ import threading
 import uuid
 import sqlite3
 
-# GENERAR UUID:
-# str(uuid.uuid4())
-
 HOST = "localhost"
 PORT = 9020
 DATA = "registry.db"
-
-class Server:
-    def __init__(self):
-        pass
-
-    def handle_request(self):
-        pass
 
 class Database:
     def __init__(self):
@@ -70,21 +60,56 @@ class Database:
 class Registry:
     def __init__(self):
         try:
-            self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.server.bind((HOST, PORT))
-            self.server.listen(5)
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.bind((HOST, PORT))
+            self.socket.listen(5)
+            print(f"Registry server listening on {HOST}:{PORT}")
         except Exception as e:
             raise e
 
+        self.database = Database()
         self.lock = threading.Lock()
 
-    def handle_request():
-        socket, adress = self.server.accept()
+    def start(self):
+        try:
+            while True:
+                self.handle_request()
+        except Exception as e:
+            self.socket.close()
+            raise e
+
+    def handle_request(self):
+        client_socket, client_adress = self.socket.accept()
+
         with self.lock:
-            data = socket.recv(2048).decode("utf-8").loads()
-        socket.close()
+            data = client_socket.recv(1024).decode("utf-8").loads()
+            status = False
+            token = None
 
-    def drone_exists(identifier):
-        pass
+            print(f"Request received from {client_adress}")
 
+            try:
+                if data["operation"] == "register":
+                    # Registrar a un nuevo dron
+                    if database.insert_drone(data["identifier"], data["alias"], data["token"]):
+                        token = str(uuid.uuid4())
+                        status = True
+                elif data["operation"] == "delete":
+                    # Borrar un dron existente
+                    status = database.delete_drone(data["identifier"])
+                elif data["operation"] == "modify":
+                    # Modificar un dron existente
+                    status = database.modify_drone(data["identifier"], data["alias"], data["token"])
 
+                response = {
+                    "accepted": status,
+                    "token": token
+                }
+                client_socket.send(json.dumps(response).encode("utf-8"))
+                client.socket.close()
+
+            except Exception as e:
+                raise e
+
+if __name__ == "__main__":
+    registry = Registry().start()
