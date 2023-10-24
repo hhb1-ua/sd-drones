@@ -1,9 +1,24 @@
+import json
+import socket
+
 class Drone:
     def __init__(self, identifier, alias):
         self.identifier = identifier
         self.alias = alias
+        self.token = None
         self.x = 0
         self.y = 0
+
+    def __str__(self):
+        return json.dumps({
+            "identifier": self.identifier,
+            "alias": self.alias,
+            "token": self.token,
+            "position": {
+                "x": self.x,
+                "y": self.y
+            }
+        })
 
     def step_toward(self, dx, dy):
         # Comprobar que la posición está dentro del mapa
@@ -25,3 +40,10 @@ def get_direction(a, b):
     if d < 0:
         return -1
     return 0
+
+# Pruebas
+if __name__ == "__main__":
+    drone = Drone(0, "dron")
+    print(str(drone))
+    drone.step_toward(5, 5)
+    print(str(drone))
