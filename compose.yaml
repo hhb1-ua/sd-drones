@@ -1,0 +1,51 @@
+version: "3"
+
+services:
+    sd_zookeeper:
+        image: confluentinc/cp-zookeeper:latest
+        hostname: zookeeper
+        container_name: sd_zookeeper
+        ports:
+            - "2181:2181"
+        environment:
+            ZOOKEEPER_SERVER_ID: 1
+            ZOOKEEPER_CLIENT_PORT: 2181
+            ZOOKEEPER_TICK_TIME: 2000
+        networks:
+            - engine-network
+
+    sd_kafka:
+        image: confluentinc/cp-kafka:latest
+        hostname: kafka
+        container_name: sd_kafka
+        depends_on:
+            - sd_zookeeper
+        environment:
+            KAFKA_BROKER_ID: 1
+            KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+            KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+            KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+            KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+        ports:
+            - "9092:9092"
+            - "9093:9093"
+        networks:
+            - engine-network
+
+    sd_kafdrop:
+        image: obsidiandynamics/kafdrop:latest
+        hostname: kafdrop
+        container_name: sd_kafdrop
+        restart: unless-stopped
+        environment:
+            KAFKA_BROKERCONNECT: kafka:9092
+        depends_on:
+            - sd_kafka
+        networks:
+            - engine-network
+        ports:
+            - "9000:9000"
+
+networks:
+    engine-network:
+        driver: bridge
