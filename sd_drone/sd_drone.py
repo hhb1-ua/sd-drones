@@ -2,11 +2,14 @@ import json
 import socket
 import sys
 
-REGISTRY_HOST = 'localhost'
+REGISTRY_HOST = "localhost"
 REGISTRY_PORT = 9020
 
-ENGINE_HOST = 'localhost'
+ENGINE_HOST = "localhost"
 ENGINE_PORT = 9010
+
+KAFKA_HOST = "kafka"
+KAFKA_PORT = 9092
 
 class Drone:
     def __init__(self, identifier, alias):

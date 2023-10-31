@@ -1,4 +1,0 @@
-kafka-python
-json
-socket
-threading
