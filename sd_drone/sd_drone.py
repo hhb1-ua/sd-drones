@@ -2,14 +2,9 @@ import json
 import socket
 import sys
 
-REGISTRY_HOST = "localhost"
-REGISTRY_PORT = 9020
-
-ENGINE_HOST = "localhost"
-ENGINE_PORT = 9010
-
-KAFKA_HOST = "kafka"
-KAFKA_PORT = 9092
+ENGINE_ADRESS = ("engine", 9010)
+REGISTRY_ADRESS =  ("registry", 9020)
+BROKER_ADRESS =  ("kafka", 9092)
 
 class Drone:
     def __init__(self, identifier, alias):
@@ -39,13 +34,10 @@ class Drone:
         self.x += get_direction(self.x, dx)
         self.y += get_direction(self.y, dy)
 
-        # Enviar la información
-        # TODO
-
     def identity_register(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server.connect((REGISTRY_HOST, REGISTRY_PORT))
+            server.connect((REGISTRY_ADRESS[0], REGISTRY_ADRESS[1]))
 
             message = json.dumps({
                 "operation": "register",
@@ -65,14 +57,14 @@ class Drone:
 
         except Exception as e:
             server.close()
-            print(str(e))
+            raise e
 
         return False
 
     def identity_modify(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server.connect((REGISTRY_HOST, REGISTRY_PORT))
+            server.connect((REGISTRY_ADRESS[0], REGISTRY_ADRESS[1]))
 
             message = json.dumps({
                 "operation": "modify",
@@ -90,14 +82,14 @@ class Drone:
 
         except Exception as e:
             server.close()
-            print(str(e))
+            raise e
 
         return False
 
     def identity_delete(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server.connect((REGISTRY_HOST, REGISTRY_PORT))
+            server.connect((REGISTRY_ADRESS[0], REGISTRY_ADRESS[1]))
 
             message = json.dumps({
                 "operation": "delete",
@@ -114,7 +106,7 @@ class Drone:
 
         except Exception as e:
             server.close()
-            print(str(e))
+            raise e
 
         return False
 
@@ -128,8 +120,9 @@ def get_direction(a, b):
     return 0
 
 if __name__ == "__main__":
-    # if len(sys.argv) != 5:
-    #     print(f"Usage: {sys.argv[0]} <identifier> <alias> <engine adress> <broker adress>")
-    #     quit()
+    if len(sys.argv) != 3:
+        print(f"Usage: {sys.argv[0]} <identifier> <alias> [<engine> <registry> <broker>]")
+        quit()
 
-    print(*sys.argv)
+    drone = Drone(int(sys.argv[1]), str(sys.argv[2]))
+    print(drone)
