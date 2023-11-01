@@ -125,4 +125,15 @@ if __name__ == "__main__":
         quit()
 
     drone = Drone(int(sys.argv[1]), str(sys.argv[2]))
-    print(drone)
+    print(f"Successfully created drone <{drone.alias}> with identifier <{drone.identifier}>")
+
+    try:
+        print(f"Registering drone at {REGISTRY_ADRESS[0]}:{REGISTRY_ADRESS[1]}")
+
+        if drone.identity_register():
+            print(f"Received token <{drone.token}>")
+        else:
+            print(f"Error in registry, finishing program")
+            quit()
+    except Exception as e:
+        print(str(e))

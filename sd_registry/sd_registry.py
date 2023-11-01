@@ -4,12 +4,11 @@ import threading
 import uuid
 import sqlite3
 
-HOST = "localhost"
+HOST = "registry"
 PORT = 9020
 DATA = "registry.db"
 
 REGISTRY_ADRESS = ("registry", 9020)
-DATABASE_ADRESS = ("database", 9030)
 
 class Database:
     def __init__(self, direction):
