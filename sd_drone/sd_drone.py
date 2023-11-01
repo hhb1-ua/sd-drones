@@ -128,8 +128,8 @@ def get_direction(a, b):
     return 0
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <identifier> <alias>")
-        quit()
+    # if len(sys.argv) != 5:
+    #     print(f"Usage: {sys.argv[0]} <identifier> <alias> <engine adress> <broker adress>")
+    #     quit()
 
-    drone = Drone(int(sys.argv[1]), sys.argv[2])
+    print(*sys.argv)
