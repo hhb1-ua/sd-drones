@@ -8,6 +8,9 @@ HOST = "localhost"
 PORT = 9020
 DATA = "registry.db"
 
+REGISTRY_ADRESS = ("registry", 9020)
+DATABASE_ADRESS = ("database", 9030)
+
 class Database:
     def __init__(self, direction):
         self.direction = direction
