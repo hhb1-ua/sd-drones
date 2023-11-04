@@ -46,6 +46,10 @@ services:
         ports:
             - "9000:9000"
 
+volumes:
+    registry-database:
+        driver: local
+
 networks:
     engine-network:
         driver: bridge

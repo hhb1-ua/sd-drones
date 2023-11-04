@@ -1,5 +1,4 @@
 #!/bin/bash
-clear
 docker build\
     -t sd_engine\
     ./sd_engine
