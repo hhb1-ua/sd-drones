@@ -3,4 +3,4 @@ WORKDIR /app
 COPY requirements.txt requirements.txt
 RUN pip install -r requirements.txt
 COPY . .
-CMD ["python3", "-u", "sd_engine.py", "kafka", "9092"]
+CMD ["python3", "-u", "sd_engine.py"]

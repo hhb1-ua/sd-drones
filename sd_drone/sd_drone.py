@@ -37,7 +37,7 @@ class Drone:
     def identity_register(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server.connect((REGISTRY_ADRESS[0], REGISTRY_ADRESS[1]))
+            server.connect(REGISTRY_ADRESS)
 
             message = json.dumps({
                 "operation": "register",
@@ -125,6 +125,27 @@ class Drone:
 
     # MÉTODOS DE COORDINACIÓN CON EL MOTOR
 
+    def get_engine_key(self):
+        try:
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.connect(ENGINE_ADRESS)
+            server.send(json.dumps({"token": self.token}).encode("utf-8"))
+
+            response = server.recv(1024).decode("utf-8")
+            response = json.loads(response)
+
+            server.close()
+
+            if response["accepted"]:
+                self.partition = response["partition"]
+                return True
+
+        except Exception as e:
+            server.close()
+            raise e
+
+        return False
+
     def get_drone_list(self):
         consumer = kafka.KafkaConsumer(
             "drone_list",
@@ -140,8 +161,7 @@ class Drone:
         consumer = kafka.KafkaConsumer(
             bootstrap_servers = [f"{BROKER_ADRESS[0]}:{BROKER_ADRESS[1]}"],
             value_deserializer = lambda msg: msg.decode("utf-8"),
-            consumer_timeout_ms = CONNECTION_TIMEOUT * 1000
-        )
+            consumer_timeout_ms = CONNECTION_TIMEOUT * 1000)
 
         consumer.assign([kafka.TopicPartition("drone_target", self.partition)])
 
@@ -152,9 +172,8 @@ class Drone:
     def publish_data(self):
         producer = kafka.KafkaProducer(
             bootstrap_servers = [BROKER_ADRESS],
-            value_serializer = lambda message: message.encode("utf-8")
-        )
-        producer.send(topic, value = str(self))
+            value_serializer = lambda message: message.encode("utf-8"))
+        producer.send("drone_position", value = str(self), partition = self.partition)
 
     # MÉTODOS DE INTERFAZ DE USUARIO
 
