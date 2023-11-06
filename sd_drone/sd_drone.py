@@ -200,8 +200,7 @@ def get_direction(a, b):
 
 def get_partition_number(topic):
     consumer = kafka.KafkaConsumer(
-        bootstrap_servers = [BROKER_ADRESS]
-    )
+        bootstrap_servers = [BROKER_ADRESS])
     return len(consumer.partitions_for_topic(topic))
 
 if __name__ == "__main__":

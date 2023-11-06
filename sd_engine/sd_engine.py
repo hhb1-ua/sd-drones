@@ -4,11 +4,13 @@ import sys
 import os
 import kafka
 import datetime
+import threading
 
-ENGINE_ADRESS = ("engine", 9010)
-REGISTRY_ADRESS =  ("registry", 9020)
-BROKER_ADRESS =  ("kafka", 9092)
-CONNECTION_TIMEOUT = 20
+ENGINE_ADRESS           = ("engine", 9010)
+ENGINE_WEATHER_ADRESS   = ("engine", 9011)
+REGISTRY_ADRESS         = ("registry", 9020)
+BROKER_ADRESS           = ("kafka", 9092)
+CONNECTION_TIMEOUT      = 20
 
 def read_figure_file(source):
     figures = []
@@ -42,12 +44,13 @@ class Listener:
 
 class Engine:
     def __init__(self):
-        self.listeners  = {} # Diccionario que relaciona la llave de objetivo del dron con su información
-        self.unasigned  = [] # Lista de llaves de objetivo que aún no han sido asignadas
-        self.socket     = None
-        self.lock       = None
-        self.auth       = False
-        self.loop       = False
+        self.listeners  = {}    # Diccionario que relaciona la llave de objetivo del dron con su información
+        self.unasigned  = []    # Lista de llaves de objetivo que aún no han sido asignadas
+        self.safe       = True  # Estado de seguridad del clima
+
+        # Servicios en ejecución
+        self.authenticacion_service = False
+        self.weather_service        = False
 
     def add_listener(self, key, listener):
         if self.listeners.has_key(key):
@@ -56,24 +59,39 @@ class Engine:
         self.listeners[key] = listener
         return True
 
-    def initialize_authentication_service(self):
+    def initialize_weather_service(self):
+        weather_socket = None
+
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.bind(ENGINE_ADRESS)
-            self.socket.listen(5)
+            weather_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            weather_socket.bind(ENGINE_WEATHER_ADRESS)
+            weather_socket.listen(5)
         except Exception as e:
             raise e
 
-        self.lock = threading.Lock()
+        self.weather_service = True
+        while self.weather_service:
+            self.track_weather(weather_socket)
+
+    def initialize_authentication_service(self):
+        drone_socket = None
+
+        try:
+            drone_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            drone_socket.bind(ENGINE_ADRESS)
+            drone_socket.listen(5)
+        except Exception as e:
+            raise e
+
         self.auth = True
-
         while self.auth:
-            authenticate_drone()
+            self.authenticate_drone(drone_socket)
 
-    def authenticate_drone(self):
-        client_socket, client_adress = self.socket.accept()
+    def authenticate_drone(self, drone_socket):
+        client_socket, client_adress = drone_socket.accept()
+        lock = threading.Lock()
 
-        with self.lock:
+        with lock:
             data = json.loads(client_socket.recv(1024).decode("utf-8"))
             status = False
             partition = 0
@@ -134,9 +152,16 @@ class Engine:
                     delete_ilstener(key)
             time.sleep(2)
 
-    def track_weather(self):
-        # TODO
-        pass
+    def track_weather(self, weather_socket):
+        client_socket, client_adress = weather_socket.accept()
+        lock = threading.Lock()
+
+        with lock:
+            try:
+                self.safe = json.loads(weather_socket.recv(1024).decode("utf-8"))["safe"]
+                client_socket.close()
+            except Exception as e:
+                raise e
 
     def display_drones(self):
         # TODO
