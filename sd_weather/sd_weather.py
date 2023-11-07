@@ -3,54 +3,90 @@ import json
 import time
 import threading
 
-ENGINE_ADRESS = ("engine", 9011)
+SETTINGS = None
+WEATHER = None
 
 class Weather:
     def __init__(self):
-        self.threshold      = 0     # Temperatura mínima
-        self.safe           = True  # Estado de seguridad
-        self.service        = False # Estado del servicio
+        self.safe       = True  # Estado de seguridad
+        self.service    = False # Estado del servicio
 
-        # Comenzar servicio
         try:
-            threading.Thread(target = self.track_safety_status, args = (2)).start()
+            threading.Thread(target = self.start_service, args = ()).start()
         except Exception as e:
             raise e
 
-    def read_weather_database(self, path):
+    def set_temperature(self, temperature):
         try:
-            with open(path, "r") as database:
+            with open(SETTINGS["weather"]["database"], "w") as database:
+                database.write(json.dumps({"temperature": temperature}))
+        except Exception as e:
+            raise e
+
+    def get_temperature(self):
+        try:
+            with open(SETTINGS["weather"]["database"], "r") as database:
                 return json.loads(database.read())["temperature"]
         except Exception as e:
             raise e
 
-    def send_weather_status_notification(self):
+    def send_notification(self):
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server.connect(ENGINE_ADRESS)
+            server.connect((SETTINGS["adress"]["weather"]["host"], SETTINGS["adress"]["weather"]["port"]))
             server.send(json.dumps({"safe": self.safe}).encode("utf-8"))
             server.close()
         except Exception as e:
-            server.close()
             raise e
 
-        return False
-
-    def track_safety_status(self, tick):
+    def start_service(self):
         self.service = True
+
         try:
             while self.service:
-                temperature = read_weather_database("weather.json")
-                if self.safe and temperature < self.threshold:
+                temperature = self.get_temperature()
+                notification = False
+
+                if self.safe and temperature < SETTINGS["weather"]["threshold"]:
                     # La temperatura ha pasado a estar fuera del umbral
                     self.safe = False
-                    self.send_weather_status_notification()
-                else if not self.safe and temperature >= self.threshold:
+                    notification = True
+                    print("The temperature has become unsafe, sending notification")
+
+                elif not self.safe and temperature >= SETTINGS["weather"]["threshold"]:
                     # La temperatura ha pasado a estar dentro del umbral
                     self.safe = True
-                    self.send_weather_status_notification()
-                time.sleep(tick)
+                    notification = True
+                    print("The temperature is now safe, sending notification")
 
+                timer = 2
+                while notification:
+                    try:
+                        self.send_notification()
+                    except:
+                        if timer < 16:
+                            print(f"Couldn't send notification, retrying in {timer} seconds...")
+                            time.sleep(timer)
+                            timer *= 2
+                        else:
+                            print("Connection lost")
+                            break
+
+                time.sleep(SETTINGS["weather"]["tick"])
         except Exception as e:
             self.service = False
             raise e
+
+if __name__ == "__main__":
+    try:
+        with open("settings.json", "r") as settings_file:
+            SETTINGS = json.loads(settings_file.read())
+    except Exception as e:
+        print("Could not load settings file 'settings.json', shutting down.")
+        quit()
+
+    try:
+        WEATHER = Weather()
+    except Exception as e:
+        print("Service stopped abruptly, shutting down.")
+        quit()

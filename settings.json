@@ -1,0 +1,29 @@
+{
+    "adress": {
+        "registry": {
+            "host": "registry",
+            "port": 9010
+        },
+        "authentication": {
+            "host": "engine",
+            "port": 9020
+        },
+        "weather": {
+            "host": "engine",
+            "port": 9030
+        },
+        "broker": {
+            "host": "kafka",
+            "port": 9092
+        }
+    },
+    "message": {
+        "length": 1024,
+        "codification": "utf-8"
+    },
+    "weather": {
+        "threshold": 0,
+        "tick": 4,
+        "database": "weather.json"
+    }
+}
