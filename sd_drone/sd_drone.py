@@ -18,20 +18,37 @@ def get_direction(a, b):
         return -1
     return 0
 
-# def get_partition_number(topic):
-#     consumer = kafka.KafkaConsumer(
-#         bootstrap_servers = [BROKER_ADRESS])
-#     return len(consumer.partitions_for_topic(topic))
+def call_repeatedly(function):
+    timer = 2
+    while timer <= SETTINGS["message"]["timeout"]:
+        if function():
+            return True
+        time.sleep(timer)
+        timer *= 2
+    return False
 
 class Drone:
-    def __init__(self, identifier, alias):
+    def __init__(self, identifier, alias, token = None):
         self.identifier = identifier    # Identificador interno
         self.alias      = alias         # Nombre interno
-        self.token      = None          # Código de autentificación
+        self.token      = token         # Código de autentificación
         self.partition  = None          # Partición asignada
 
         self.x = 0
         self.y = 0
+
+        if token is None:
+            if not call_repeatedly(self.identity_register):
+                raise Exception("Couldn't connect to registry server.")
+
+        if not call_repeatedly(self.identity_authenticate):
+            raise Exception("Couldn't authenticate in engine server.")
+
+        try:
+            threading.Thread(target = self.track_drone_list, args = ()).start()
+            threading.Thread(target = self.track_drone_target, args = ()).start()
+        except Exception as e:
+            raise e
 
     def __str__(self):
         return json.dumps({
@@ -101,6 +118,22 @@ class Drone:
         except Exception as e:
             return False
 
+    def identity_authenticate(self):
+        try:
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.connect((SETTINGS["adress"]["authentication"]["host"], SETTINGS["adress"]["authentication"]["port"]))
+            server.send(json.dumps({"token": self.token}).encode(SETTINGS["message"]["codification"]))
+            response = json.loads(server.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
+            server.close()
+
+            if response["accepted"]:
+                self.partition = response["partition"]
+                return True
+            return False
+
+        except Exception as e:
+            raise e
+
     def step_toward(self, target):
         if target["x"] < 0 or target["y"] < 0 or target["x"] >= SETTINGS["map"]["cols"] or target["y"] >= SETTINGS["map"]["rows"]:
             return False
@@ -109,105 +142,67 @@ class Drone:
         self.y += get_direction(self.y, target["y"])
         return True
 
-    # def get_engine_key(self):
-    #     try:
-    #         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #         server.connect(ENGINE_ADRESS)
-    #         server.send(json.dumps({"token": self.token}).encode("utf-8"))
-    #
-    #         response = server.recv(1024).decode("utf-8")
-    #         response = json.loads(response)
-    #
-    #         server.close()
-    #
-    #         if response["accepted"]:
-    #             self.partition = response["partition"]
-    #             return True
-    #
-    #     except Exception as e:
-    #         server.close()
-    #         raise e
-    #
-    #     return False
-    #
-    # def get_drone_list(self):
-    #     consumer = kafka.KafkaConsumer(
-    #         "drone_list",
-    #         bootstrap_servers = [f"{BROKER_ADRESS[0]}:{BROKER_ADRESS[1]}"],
-    #         value_deserializer = lambda msg: msg.decode("utf-8"),
-    #         consumer_timeout_ms = CONNECTION_TIMEOUT * 1000
-    #     )
-    #
-    #     for message in consumer:
-    #         self.print_map(json.loads(message.value)["drone_list"])
-    #
-    # def get_target(self):
-    #     consumer = kafka.KafkaConsumer(
-    #         bootstrap_servers = [f"{BROKER_ADRESS[0]}:{BROKER_ADRESS[1]}"],
-    #         value_deserializer = lambda msg: msg.decode("utf-8"),
-    #         consumer_timeout_ms = CONNECTION_TIMEOUT * 1000)
-    #
-    #     consumer.assign([kafka.TopicPartition("drone_target", self.partition)])
-    #
-    #     for message in consumer:
-    #         if self.step_toward(json.loads(message.value)):
-    #             self.publish_data()
-    #
-    # def publish_data(self):
-    #     producer = kafka.KafkaProducer(
-    #         bootstrap_servers = [BROKER_ADRESS],
-    #         value_serializer = lambda message: message.encode("utf-8"))
-    #     producer.send("drone_position", value = str(self), partition = self.partition)
-    #
-    # def print_map(self, drone_list):
-    #     os.system("clear")
-    #
-    #     print(f"{self.alias} is currently at ({self.x}, {self.y})", end = "\n\n")
-    #     for i in range(20):
-    #         for j in range(20):
-    #             if {"x": j, "y": i} in drone_list:
-    #                 print("*", end = " ")
-    #             else:
-    #                 print(".", end = " ")
-    #       print()
+    def track_drone_list(self):
+        consumer = kafka.KafkaConsumer(
+            "drone_list",
+            bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
+            value_deserializer = lambda msg: msg.decode(SETTINGS["message"]["codification"]),
+            consumer_timeout_ms = SETTINGS["message"]["timeout"] * 1000)
+
+        for message in consumer:
+            self.print_map(json.loads(message.value)["drone_list"])
+
+    def track_drone_target(self):
+        consumer = kafka.KafkaConsumer(
+            bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
+            value_deserializer = lambda msg: msg.decode(SETTINGS["message"]["codification"]))
+        consumer.assign([kafka.TopicPartition("drone_target", self.partition)])
+
+        producer = kafka.KafkaProducer(
+            bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
+            value_serializer = lambda msg: msg.encode(SETTINGS["message"]["codification"]))
+
+        for message in consumer:
+            if not self.step_toward(json.loads(message.value)):
+                print("Couldn't step towards target, out of bounds.")
+            producer.send("drone_position", value = str(self), partition = self.partition)
+
+    def print_map(self, drone_list):
+        print(f"Drone <{self.alias}> is currently at ({self.x}, {self.y})")
+
+        # TODO
+        # for i in range(SETTINGS["map"]["rows"]):
+        #     for j in range(SETTINGS["map"]["cols"]):
+        #         if {"x": j, "y": i} in drone_list:
+        #             print("*", end = " ")
+        #         else:
+        #             print(".", end = " ")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <identifier> <alias>")
+    if len(sys.argv) != 3 and len(sys.argv) != 4:
+        print(f"Usage: {sys.argv[0]} <identifier> <alias> [token]")
         quit()
 
     try:
         with open("settings/settings.json", "r") as settings_file:
             SETTINGS = json.loads(settings_file.read())
     except Exception as e:
-        print("Could not load settings file 'settings.json', shutting down.")
+        print("Could not load settings file 'settings.json', shutting down")
         quit()
 
     try:
-        DRONE = Drone(int(sys.argv[1]), str(sys.argv[2]))
+        if len(sys.argv) == 3:
+            DRONE = Drone(int(sys.argv[1]), str(sys.argv[2]))
+        else:
+            if str(sys.argv[3]) == "null":
+                DRONE = Drone(int(sys.argv[1]), str(sys.argv[2]))
+            else:
+                DRONE = Drone(int(sys.argv[1]), str(sys.argv[2]), str(sys.argv[3]))
         print(f"Successfully created drone <{DRONE.alias}> with identifier <{DRONE.identifier}>")
     except Exception as e:
         print(str(e))
-        print("Service stopped abruptly, shutting down.")
+        print("Service stopped abruptly, shutting down")
         quit()
-
-    if DRONE.identity_register():
-        print(f"Received token <{DRONE.token}>")
-    else:
-        print("Couldn't connect to registry server, shutting down.")
-        quit()
-
-    # threading.Thread(target = drone.get_drone_list, args = None).start()
-    # threading.Thread(target = drone.get_target, args = None).start()
-
-    # try:
-    #     if input("Connect to engine? (y/N) ") is "y":
-    #         drone.main_loop(BROKER_ADRESS[0], BROKER_ADRESS[1])
-    #     else:
-    #         quit()
-    # except Exception as e:
-    #     print(str(e))
-    #     quit()
 
 
 

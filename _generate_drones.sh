@@ -27,6 +27,7 @@ do
         -t $container\
         --build-arg IDENTIFIER=$identifier\
         --build-arg ALIAS=$alias\
+        --build-arg TOKEN="null"\
         ./sd_drone
     konsole\
         &> /dev/null\
@@ -35,7 +36,6 @@ do
         docker run\
         --rm\
         --volume "$(pwd)/sd_volume/settings/":"/app/settings/"\
-        --volume "$(pwd)/sd_volume/registry/":"/app/registry/"\
         --network $network\
         --network-alias $alias\
         $container\

@@ -95,6 +95,7 @@ class Registry:
                 token = str(uuid.uuid4())
                 if self.database.insert_drone(data["identifier"], data["alias"], token):
                     status = True
+                    print(f"Sent token <{token}> to drone <{data['alias']}>")
             elif data["operation"] == "delete":
                 # Borrar un dron existente
                 status = self.database.delete_drone(data["identifier"])
@@ -113,13 +114,13 @@ if __name__ == "__main__":
         with open("settings/settings.json", "r") as settings_file:
             SETTINGS = json.loads(settings_file.read())
     except Exception as e:
-        print("Could not load settings file 'settings.json', shutting down.")
+        print("Could not load settings file 'settings.json', shutting down")
         quit()
 
     try:
         REGISTRY = Registry(Database(SETTINGS["registry"]["database"]))
-        print("Registry server has been successfully started.")
+        print("Registry server has been successfully started")
     except Exception as e:
         print(str(e))
-        print("Service stopped abruptly, shutting down.")
+        print("Service stopped abruptly, shutting down")
         quit()

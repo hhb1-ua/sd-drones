@@ -41,7 +41,7 @@ class Weather:
                     try:
                         self.send_notification()
                     except:
-                        if timer < 16:
+                        if timer <= SETTINGS["message"]["timeout"]:
                             print(f"Couldn't send notification, retrying in {timer} seconds...")
                             time.sleep(timer)
                             timer *= 2
@@ -82,11 +82,11 @@ if __name__ == "__main__":
         with open("settings/settings.json", "r") as settings_file:
             SETTINGS = json.loads(settings_file.read())
     except Exception as e:
-        print("Could not load settings file 'settings.json', shutting down.")
+        print("Could not load settings file 'settings.json', shutting down")
         quit()
 
     try:
         WEATHER = Weather()
     except Exception as e:
-        print("Service stopped abruptly, shutting down.")
+        print("Service stopped abruptly, shutting down")
         quit()

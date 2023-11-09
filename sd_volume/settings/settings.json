@@ -19,7 +19,8 @@
     },
     "message": {
         "length": 1024,
-        "codification": "utf-8"
+        "codification": "utf-8",
+        "timeout": 16
     },
     "map": {
         "cols": 20,
@@ -27,7 +28,7 @@
     },
     "weather": {
         "threshold": 0,
-        "tick": 4,
+        "tick": 2,
         "database": "weather/weather.json"
     },
     "registry": {
@@ -36,6 +37,8 @@
     },
     "engine": {
         "backlog": 10,
-        "database": "registry/registry.db"
+        "tick": 2,
+        "database": "registry/registry.db",
+        "figures": "engine/figures.json"
     }
 }

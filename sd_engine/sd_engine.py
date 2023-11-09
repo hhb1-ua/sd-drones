@@ -6,11 +6,8 @@ import kafka
 import datetime
 import threading
 
-ENGINE_ADRESS           = ("engine", 9010)
-ENGINE_WEATHER_ADRESS   = ("engine", 9011)
-REGISTRY_ADRESS         = ("registry", 9020)
-BROKER_ADRESS           = ("kafka", 9092)
-CONNECTION_TIMEOUT      = 20
+SETTINGS    = None
+ENGINE      = None
 
 def read_figure_file(source):
     figures = []
@@ -25,22 +22,41 @@ def read_figure_file(source):
                 figure["drones"].push({"identifier": d["ID"], "target": {"x": coords[0], "y": coords[1]}})
     return figures
 
+class Figure:
+    def __init__(self, name, drones):
+        self.name   = name
+        self.drones = drones
+
 class Listener:
-    def __init__(self, partition):
-        """
-        :partition:     Partición de escucha
-        :timestamp:     Hora de la última trama recibida
-        :status:        Estado de la conexión
-        :identifier:    Identificador externo
-        :position:      Posición actual
-        :target:        Posición final
-        """
-        self.partition  = partition
-        self.timestamp  = None
-        self.status     = True
+    def __init__(self, identifier, alias):
+        # Información del dron
         self.identifier = None
+        self.alias      = None
         self.position   = None
+
+        # Información de escucha
+        self.partition  = None
+        self.timestamp  = None
         self.target     = None
+        self.status     = None
+
+class Engine:
+    def __init__(self):
+        self.queue      = []
+        self.listeners  = {}
+        self.safe       = True
+
+        # Servicios activos
+        self.service_authentication = False
+        self.service_wather         = False
+        self.service_spectacle      = False
+
+    def get_figures(self):
+        try:
+            with open(SETTINGS["engine"]["figures"], "r") as figure_file:
+
+        except Exception as e:
+            return False
 
 class Engine:
     def __init__(self):
@@ -188,9 +204,16 @@ class Engine:
         # Primero, debemos tener una figura para leer
 
 if __name__ == "__main__":
-    engine = Engine()
+    try:
+        with open("settings/settings.json", "r") as settings_file:
+            SETTINGS = json.loads(settings_file.read())
+    except Exception as e:
+        print("Could not load settings file 'settings.json', shutting down")
+        quit()
 
-    threading.Thread(target = engine.initialize_authentication_service, args = None).start()
-    threading.Thread(target = engine.initialize_engine_service, args = None).start()
-
-    print("Hello world?")
+    try:
+        ENGINE = Engine()
+    except Exception as e:
+        print(str(e))
+        print("Service stopped abruptly, shutting down")
+        quit()
