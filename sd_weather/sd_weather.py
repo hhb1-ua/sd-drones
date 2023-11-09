@@ -3,8 +3,8 @@ import json
 import time
 import threading
 
-SETTINGS = None
-WEATHER = None
+SETTINGS    = None
+WEATHER     = None
 
 class Weather:
     def __init__(self):
@@ -13,29 +13,6 @@ class Weather:
 
         try:
             threading.Thread(target = self.start_service, args = ()).start()
-        except Exception as e:
-            raise e
-
-    def set_temperature(self, temperature):
-        try:
-            with open(SETTINGS["weather"]["database"], "w") as database:
-                database.write(json.dumps({"temperature": temperature}))
-        except Exception as e:
-            raise e
-
-    def get_temperature(self):
-        try:
-            with open(SETTINGS["weather"]["database"], "r") as database:
-                return json.loads(database.read())["temperature"]
-        except Exception as e:
-            raise e
-
-    def send_notification(self):
-        try:
-            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server.connect((SETTINGS["adress"]["weather"]["host"], SETTINGS["adress"]["weather"]["port"]))
-            server.send(json.dumps({"safe": self.safe}).encode("utf-8"))
-            server.close()
         except Exception as e:
             raise e
 
@@ -77,9 +54,32 @@ class Weather:
             self.service = False
             raise e
 
+    def set_temperature(self, temperature):
+        try:
+            with open(SETTINGS["weather"]["database"], "w") as database:
+                database.write(json.dumps({"temperature": temperature}))
+        except Exception as e:
+            raise e
+
+    def get_temperature(self):
+        try:
+            with open(SETTINGS["weather"]["database"], "r") as database:
+                return json.loads(database.read())["temperature"]
+        except Exception as e:
+            raise e
+
+    def send_notification(self):
+        try:
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.connect((SETTINGS["adress"]["weather"]["host"], SETTINGS["adress"]["weather"]["port"]))
+            server.send(json.dumps({"safe": self.safe}).encode("utf-8"))
+            server.close()
+        except Exception as e:
+            raise e
+
 if __name__ == "__main__":
     try:
-        with open("settings.json", "r") as settings_file:
+        with open("settings/settings.json", "r") as settings_file:
             SETTINGS = json.loads(settings_file.read())
     except Exception as e:
         print("Could not load settings file 'settings.json', shutting down.")

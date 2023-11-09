@@ -34,6 +34,8 @@ do
         -e\
         docker run\
         --rm\
+        --volume "$(pwd)/sd_volume/settings/":"/app/settings/"\
+        --volume "$(pwd)/sd_volume/registry/":"/app/registry/"\
         --network $network\
         --network-alias $alias\
         $container\

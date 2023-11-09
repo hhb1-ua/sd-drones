@@ -21,9 +21,21 @@
         "length": 1024,
         "codification": "utf-8"
     },
+    "map": {
+        "cols": 20,
+        "rows": 20
+    },
     "weather": {
         "threshold": 0,
         "tick": 4,
-        "database": "weather.json"
+        "database": "weather/weather.json"
+    },
+    "registry": {
+        "backlog": 10,
+        "database": "registry/registry.db"
+    },
+    "engine": {
+        "backlog": 10,
+        "database": "registry/registry.db"
     }
 }
