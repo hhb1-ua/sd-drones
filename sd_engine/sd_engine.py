@@ -74,6 +74,7 @@ class Listener:
 
 class Engine:
     def __init__(self, database_registry, database_persist):
+        self.figure     = None
         self.queue      = []
         self.listeners  = {}
         self.safe       = True
@@ -85,15 +86,13 @@ class Engine:
         # Servicios activos
         self.service_authentication = False
         self.service_weather        = False
-        self.service_reading        = False
         self.service_spectacle      = False
         self.service_removal        = False
 
         threading.Thread(target = self.start_authentication_service, args = ()).start()
         threading.Thread(target = self.start_weather_service, args = ()).start()
         threading.Thread(target = self.start_removal_service, args = ()).start()
-        threading.Thread(target = self.start_reading_service, args = ()).start()
-        # threading.Thread(target = self.start_spectacle_service, args = ()).start()
+        threading.Thread(target = self.start_spectacle_service, args = ()).start()
 
     def start_weather_service(self):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -140,20 +139,68 @@ class Engine:
 
         producer = kafka.KafkaProducer(
             bootstrap_servers = [BROKER_ADRESS],
-            value_serializer = lambda msg: msg.encode(SETTINGS["message"]["codification"])))
+            value_serializer = lambda msg: json.dumps(msg.encode(SETTINGS["message"]["codification"])))
 
         consumer = kafka.KafkaConsumer(
             "drone_position",
             bootstrap_servers = [BROKER_ADRESS],
-            value_deserializer = lambda msg: msg.decode(SETTINGS["message"]["codification"]))
+            value_deserializer = lambda msg: json.loads(msg.decode(SETTINGS["message"]["codification"])))
 
-        # drone_position: Producer(Drone), Consumer(Engine); Posiciones individuales de cada dron
-        # drone_target: Producer(Engine), Consumer(Drone); Objetivos individuales de cada dron
-        # drone_list: Producer(Engine), Consumer(Drone); Posiciones y estados de todos los drones
+        threading.Thread(target = self.consume_drone_position, args = (consumer)).start()
 
         self.service_spectacle = True
         while self.service_spectacle:
-            pass
+            # Leer el archivo de figuras
+            if self.figure is None and len(self.queue) == 0:
+                figures = get_figures(SETTINGS["engine"]["figures"])
+                if not figures is None:
+                    self.queue = figures
+            # Ejecutar las figuras
+            else:
+                # Avanzar en la cola
+                if self.figure is None:
+                    self.figure = self.queue.pop(0)
+
+                # Publicar información
+                self.publish_drone_list(producer)
+                self.publish_drone_target(producer)
+
+                # Imprimir mapa
+                self.print_map()
+
+                # Comprobar si la figura ha acabado
+                finished = True
+                for key in self.listeners:
+                    if not self.listeners[key].finalized():
+                        finished = False
+                        break
+                if finished:
+                    self.figure = None
+
+            time.sleep(SETTINGS["engine"]["tick"])
+
+    def publish_drone_list(self, producer):
+        producer.send("drone_list", value = self.listeners)
+
+    def publish_drone_target(self, producer):
+        for key in self.listeners:
+            target = {"x": 0, "y": 0}
+
+            if not self.figure is None and self.safe:
+                if self.listeners[key].active:
+                    if self.figure.drones.has_key(key):
+                        target = self.figure.drones[key]
+
+            producer.send("drone_target", value = target, partition = key)
+
+    def consume_drone_position(self, consumer):
+        for message in consumer:
+            listener_key = message.value["identifier"]
+
+            if self.listeners.has_key(listener_key):
+                self.listeners[listener_key].stamp()
+                self.listeners[listener_key].position = message.value["position"]
+                self.listeners[listener_key].positioned = message.value["position"] is self.figure.drones[listener_key].target
 
     def start_removal_service(self):
         self.service_removal = True
@@ -162,8 +209,13 @@ class Engine:
 
             for key in self.listeners:
                 time_elapsed = (current_time - self.listeners[key]["timestamp"]).total_seconds()
-                if time_elapsed > SETTINGS["message"]["timeout"]:
-                    self.listeners[key].alive = False
+
+                if self.listeners[key].alive:
+                    if time_elapsed > SETTINGS["message"]["timeout"]:
+                        self.listeners[key].alive = False
+                else:
+                    if time_elapsed <= SETTINGS["message"]["timeout"]:
+                        self.listeners[key].alive = True
 
             time.sleep(SETTINGS["engine"]["tick"])
 
@@ -173,131 +225,8 @@ class Engine:
         self.listeners[key] = listener
         return True
 
-class Engine:
-    def __init__(self):
-        self.listeners  = {}    # Diccionario que relaciona la llave de objetivo del dron con su información
-        self.unasigned  = []    # Lista de llaves de objetivo que aún no han sido asignadas
-        self.safe       = True  # Estado de seguridad del clima
-
-        # Servicios en ejecución
-        self.authenticacion_service = False
-        self.weather_service        = False
-
-    def add_listener(self, key, listener):
-        if self.listeners.has_key(key):
-            return False
-
-        self.listeners[key] = listener
-        return True
-
-    def initialize_weather_service(self):
-        weather_socket = None
-
-        try:
-            weather_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            weather_socket.bind(ENGINE_WEATHER_ADRESS)
-            weather_socket.listen(5)
-        except Exception as e:
-            raise e
-
-        self.weather_service = True
-        while self.weather_service:
-            self.track_weather(weather_socket)
-
-    def initialize_authentication_service(self):
-        drone_socket = None
-
-        try:
-            drone_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            drone_socket.bind(ENGINE_ADRESS)
-            drone_socket.listen(5)
-        except Exception as e:
-            raise e
-
-        self.auth = True
-        while self.auth:
-            self.authenticate_drone(drone_socket)
-
-    def authenticate_drone(self, drone_socket):
-
-
-    def validate_token(token):
-        # TODO
-        return True
-
-    def publish_drone_list(self):
-        producer = kafka.KafkaProducer(
-            bootstrap_servers = [BROKER_ADRESS],
-            value_serializer = lambda message: message.encode("utf-8"))
-
-        drone_list = {}
-        for key in self.listeners:
-            drone_list[self.listeners[key]["identifier"]] = self.listeners[key]["position"]
-
-        producer.send("drone_list", value = json.dumps(drone_list))
-
-    def publish_targets(self):
-        producer = kafka.KafkaProducer(
-            bootstrap_servers = [BROKER_ADRESS],
-            value_serializer = lambda message: message.encode("utf-8"))
-
-        for key in self.listeners:
-            producer.send(
-                "drone_list",
-                value = json.dumps({
-                    "x": self.listeners[key]["target"]["x"],
-                    "y": self.listeners[key]["target"]["y"]}),
-                partition = self.listeners[key]["partition"])
-
-    def delete_listener(self, key):
-        if not self.listeners.has_key(key):
-            return False
-        del self.listeners[key]
-        return True
-
-    def delete_dead_drones(self):
-        while self.loop:
-            for key in self.listeners:
-                timer = self.listeners[key]["timestamp"] - datetime.datetime.now()
-                if timer.total_seconds() > CONNECTION_TIMEOUT:
-                    print(f"Drone {self.listeners[key]['identifier']} has been removed due to a timeout")
-                    delete_ilstener(key)
-            time.sleep(2)
-
-    def track_weather(self, weather_socket):
-        client_socket, client_adress = weather_socket.accept()
-        lock = threading.Lock()
-
-        with lock:
-            try:
-                self.safe = json.loads(weather_socket.recv(1024).decode("utf-8"))["safe"]
-                client_socket.close()
-            except Exception as e:
-                raise e
-
-    def display_drones(self):
-        # TODO
+    def print_map(self):
         pass
-
-    def track_drones(self):
-        consumer = kafka.KafkaConsumer(
-            "drone_position",
-            bootstrap_servers = [f"{BROKER_ADRESS[0]}:{BROKER_ADRESS[1]}"],
-            value_deserializer = lambda msg: msg.decode("utf-8"),
-            consumer_timeout_ms = CONNECTION_TIMEOUT * 1000
-        )
-
-        for message in consumer:
-            key = message.partition
-            data = json.loads(message.value)
-            timestamp = datetime.strptime(message.timestamp, "%y-%m-%d %H:%M:%S")
-
-            if self.listeners.has_key(key):
-                self.listeners[key].timestamp = timestamp
-                self.listeners[key].position = data["position"]
-
-    def initialize_engine_service(self):
-        # Primero, debemos tener una figura para leer
 
 if __name__ == "__main__":
     try:
