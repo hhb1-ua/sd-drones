@@ -7,6 +7,7 @@ import os
 import kafka
 import datetime
 import threading
+import time
 
 SETTINGS    = None
 ENGINE      = None
@@ -39,7 +40,7 @@ class RegistryDatabase:
             return False
 
 class PersistDatabase:
-    def __init__(self, path)
+    def __init__(self, path):
         self.path = path
 
 class Figure:
@@ -89,6 +90,12 @@ class Engine:
         self.service_spectacle      = False
         self.service_removal        = False
 
+        # if self.get_partitions("drone_position") < SETTINGS["engine"]["partitions"]:
+        #     self.add_partitions("drone_position", SETTINGS["engine"]["partitions"])
+        #
+        # if self.get_partitions("drone_target") < SETTINGS["engine"]["partitions"]:
+        #     self.add_partitions("drone_target", SETTINGS["engine"]["partitions"])
+
         threading.Thread(target = self.start_authentication_service, args = ()).start()
         threading.Thread(target = self.start_weather_service, args = ()).start()
         threading.Thread(target = self.start_removal_service, args = ()).start()
@@ -101,7 +108,7 @@ class Engine:
 
         self.service_weather = True
         while self.service_weather:
-            weather_socket, weather_adress = weather_socket.accept()
+            weather_socket, weather_adress = server_socket.accept()
             print(f"Request received from weather server at {weather_adress[0]}:{weather_adress[1]}")
             try:
                 with threading.Lock() as lock:
@@ -122,13 +129,13 @@ class Engine:
             print(f"Request received from drone at {drone_adress[0]}:{drone_adress[1]}")
             try:
                 with threading.Lock():
-                    data    = json.loads(drone_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"])))
+                    data    = json.loads(drone_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
                     status  = False
 
                     if self.database_registry.validate_drone(data["identifier"], data["token"]):
-                        if self.add_listener(data["identifier"], Listener())
+                        if self.add_listener(data["identifier"], Listener()):
                             status = True
-                    drone_socket.send(json.dumps({"accepted": status}).encode(SETTINGS["message"]["codification"])))
+                    drone_socket.send(json.dumps({"accepted": status}).encode(SETTINGS["message"]["codification"]))
             except Exception as e:
                 print(f"The request couldn't be handled properly ({str(e)})")
             finally:
@@ -225,6 +232,16 @@ class Engine:
         self.listeners[key] = listener
         return True
 
+    def get_partitions(self, topic):
+        consumer = kafka.KafkaConsumer(
+            bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+        return len(consumer.partitions_for_topic(topic))
+
+    def add_partitions(self, topic, number):
+        admin = kafka.KafkaAdminClient(
+            bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+        admin.create_partitions({topic: kafka.admin.new_partitions.NewPartitions(number)})
+
     def print_map(self):
         pass
 
@@ -237,7 +254,7 @@ if __name__ == "__main__":
         quit()
 
     try:
-        ENGINE = Engine()
+        ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]))
     except Exception as e:
         print(str(e))
         print("Service stopped abruptly, shutting down")
