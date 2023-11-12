@@ -125,7 +125,7 @@ class Drone:
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server.connect((SETTINGS["adress"]["authentication"]["host"], SETTINGS["adress"]["authentication"]["port"]))
-            server.send(json.dumps({"token": self.token}).encode(SETTINGS["message"]["codification"]))
+            server.send(json.dumps({"identifier": self.identifier,"token": self.token}).encode(SETTINGS["message"]["codification"]))
             response = json.loads(server.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
             server.close()
 
@@ -146,16 +146,16 @@ class Drone:
         consumer = kafka.KafkaConsumer(
             "drone_list",
             bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
-            value_deserializer = lambda msg: msg.decode(SETTINGS["message"]["codification"]),
+            value_deserializer = lambda msg: json.loads(msg.decode(SETTINGS["message"]["codification"])),
             consumer_timeout_ms = SETTINGS["message"]["timeout"] * 1000)
 
         for message in consumer:
-            self.print_map(json.loads(message.value)["drone_list"])
+            print(message.value["map"])
 
     def track_drone_target(self):
         consumer = kafka.KafkaConsumer(
             bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
-            value_deserializer = lambda msg: msg.decode(SETTINGS["message"]["codification"]))
+            value_deserializer = lambda msg: json.loads(msg.decode(SETTINGS["message"]["codification"])))
         consumer.assign([kafka.TopicPartition("drone_target", self.identifier)])
 
         producer = kafka.KafkaProducer(
@@ -163,20 +163,10 @@ class Drone:
             value_serializer = lambda msg: msg.encode(SETTINGS["message"]["codification"]))
 
         for message in consumer:
-            if not self.step_toward(json.loads(message.value)):
-                print("Couldn't step towards target, out of bounds.")
+            print(f"Received target {message.value}")
+            if not self.step_toward(message.value):
+                print("Couldn't step towards target, out of bounds")
             producer.send("drone_position", value = str(self), partition = self.identifier)
-
-    def print_map(self, drone_list):
-        print(f"Drone <{self.alias}> is currently at ({self.x}, {self.y})")
-
-        # TODO
-        # for i in range(SETTINGS["map"]["rows"]):
-        #     for j in range(SETTINGS["map"]["cols"]):
-        #         if {"x": j, "y": i} in drone_list:
-        #             print("*", end = " ")
-        #         else:
-        #             print(".", end = " ")
 
 if __name__ == "__main__":
     if len(sys.argv) != 3 and len(sys.argv) != 4:
