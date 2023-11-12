@@ -90,11 +90,8 @@ class Engine:
         self.service_spectacle      = False
         self.service_removal        = False
 
-        # if self.get_partitions("drone_position") < SETTINGS["engine"]["partitions"]:
-        #     self.add_partitions("drone_position", SETTINGS["engine"]["partitions"])
-        #
-        # if self.get_partitions("drone_target") < SETTINGS["engine"]["partitions"]:
-        #     self.add_partitions("drone_target", SETTINGS["engine"]["partitions"])
+        self.add_partitions("drone_position", SETTINGS["broker"]["partitions"])
+        self.add_partitions("drone_target", SETTINGS["broker"]["partitions"])
 
         threading.Thread(target = self.start_authentication_service, args = ()).start()
         threading.Thread(target = self.start_weather_service, args = ()).start()
@@ -233,14 +230,24 @@ class Engine:
         return True
 
     def get_partitions(self, topic):
-        consumer = kafka.KafkaConsumer(
-            bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
-        return len(consumer.partitions_for_topic(topic))
+        try:
+            consumer = kafka.KafkaConsumer(
+                bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+            return len(consumer.partitions_for_topic(topic))
+        except:
+            return None
 
     def add_partitions(self, topic, number):
         admin = kafka.KafkaAdminClient(
             bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
-        admin.create_partitions({topic: kafka.admin.new_partitions.NewPartitions(number)})
+        current_partitions = self.get_partitions(topic)
+
+        if current_partitions is None:
+            admin.create_topics(new_topics = [kafka.admin.NewTopic(name = topic, num_partitions = number, replication_factor = 1)])
+        elif current_partitions != number:
+            admin.create_partitions({topic: kafka.admin.new_partitions.NewPartitions(number)})
+        else:
+            return
 
     def print_map(self):
         pass
@@ -253,9 +260,4 @@ if __name__ == "__main__":
         print("Could not load settings file 'settings.json', shutting down")
         quit()
 
-    try:
-        ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]))
-    except Exception as e:
-        print(str(e))
-        print("Service stopped abruptly, shutting down")
-        quit()
+    ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]))

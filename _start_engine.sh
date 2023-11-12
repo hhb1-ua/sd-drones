@@ -13,5 +13,7 @@ konsole\
     --volume "$(pwd)/sd_volume/engine/":"/app/engine/"\
     --network sd-drones_engine-network\
     --network-alias engine\
+    --publish "9020:9020"\
+    --publish "9030:9030"\
     sd_engine\
     &
