@@ -1,3 +1,5 @@
+# TODO: Base de datos de persistencia
+
 import json
 import socket
 import sys
@@ -9,54 +11,167 @@ import threading
 SETTINGS    = None
 ENGINE      = None
 
-def read_figure_file(source):
-    figures = []
-    with open(source, "r") as _file:
-        raw = json.loads(_file.read())
-        for f in raw["figuras"]:
-            figure = {}
-            figure["name"] = f["Nombre"]
-            figure["drones"] = []
-            for d in f["Drones"]:
-                coords = d["POS"].split(",")
-                figure["drones"].push({"identifier": d["ID"], "target": {"x": coords[0], "y": coords[1]}})
-    return figures
+def get_figures(path):
+    try:
+        with open(path, "r") as figure_file:
+            figure_data = json.loads(figure_file.read())
+            figure_list = []
+            for f in figure_data["figuras"]:
+                figure = Figure(f["Nombre"])
+                for drone in f["Drones"]:
+                    t = drone["POS"].split(",")
+                    target = {"x": int(t[0]), "y": int(t[1])}
+                    figure.add_drone(int(drone["ID"]), target)
+            return figure_list
+    except Exception as e:
+        return None
+
+class RegistryDatabase:
+    def __init__(self, path):
+        self.path = path
+
+    def validate_drone(self, identifier, token):
+        try:
+            with sqlite3.connect(self.path) as con:
+                return not con.cursor().execute(f"SELECT * FROM Registry WHERE identifier = {identifier} AND token = {token};").fetchone() is None
+        except Exception as e:
+            print(str(e))
+            return False
+
+class PersistDatabase:
+    def __init__(self, path)
+        self.path = path
 
 class Figure:
-    def __init__(self, name, drones):
+    def __init__(self, name):
         self.name   = name
-        self.drones = drones
+        self.drones = {}
+
+    def add_drone(identifier, position):
+        if self.drones.has_key(identifier):
+            return False
+        self.drones[identifier] = position
+        return True
 
 class Listener:
-    def __init__(self, identifier, alias):
+    def __init__(self):
         # Información del dron
-        self.identifier = None
-        self.alias      = None
         self.position   = None
 
         # Información de escucha
-        self.partition  = None
         self.timestamp  = None
-        self.target     = None
-        self.status     = None
+        self.alive      = True
+        self.active     = False
+        self.positioned = False
+
+        self.stamp()
+
+    def stamp(self):
+        self.timestamp = datetime.datetime.now()
+
+    def finalized(self):
+        return self.alive and self.active and self.positioned
 
 class Engine:
-    def __init__(self):
+    def __init__(self, database_registry, database_persist):
         self.queue      = []
         self.listeners  = {}
         self.safe       = True
 
+        # Bases de datos
+        self.database_registry   = database_registry
+        self.database_persist    = database_persist
+
         # Servicios activos
         self.service_authentication = False
-        self.service_wather         = False
+        self.service_weather        = False
+        self.service_reading        = False
         self.service_spectacle      = False
+        self.service_removal        = False
 
-    def get_figures(self):
-        try:
-            with open(SETTINGS["engine"]["figures"], "r") as figure_file:
+        threading.Thread(target = self.start_authentication_service, args = ()).start()
+        threading.Thread(target = self.start_weather_service, args = ()).start()
+        threading.Thread(target = self.start_removal_service, args = ()).start()
+        threading.Thread(target = self.start_reading_service, args = ()).start()
+        # threading.Thread(target = self.start_spectacle_service, args = ()).start()
 
-        except Exception as e:
+    def start_weather_service(self):
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.bind((SETTINGS["adress"]["weather"]["host"], SETTINGS["adress"]["weather"]["port"]))
+        server_socket.listen(SETTINGS["engine"]["backlog"])
+
+        self.service_weather = True
+        while self.service_weather:
+            weather_socket, weather_adress = weather_socket.accept()
+            print(f"Request received from weather server at {weather_adress[0]}:{weather_adress[1]}")
+            try:
+                with threading.Lock() as lock:
+                    self.safe = json.loads(weather_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))["safe"]
+            except Exception as e:
+                print(f"The request couldn't be handled properly ({str(e)})")
+            finally:
+                weather_socket.close()
+
+    def start_authentication_service(self):
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.bind((SETTINGS["adress"]["authentication"]["host"], SETTINGS["adress"]["authentication"]["port"]))
+        server_socket.listen(SETTINGS["engine"]["backlog"])
+
+        self.service_authentication = True
+        while self.service_authentication:
+            drone_socket, drone_adress = server_socket.accept()
+            print(f"Request received from drone at {drone_adress[0]}:{drone_adress[1]}")
+            try:
+                with threading.Lock():
+                    data    = json.loads(drone_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"])))
+                    status  = False
+
+                    if self.database_registry.validate_drone(data["identifier"], data["token"]):
+                        if self.add_listener(data["identifier"], Listener())
+                            status = True
+                    drone_socket.send(json.dumps({"accepted": status}).encode(SETTINGS["message"]["codification"])))
+            except Exception as e:
+                print(f"The request couldn't be handled properly ({str(e)})")
+            finally:
+                drone_socket.close()
+
+    def start_spectacle_service(self):
+        BROKER_ADRESS = SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])
+
+        producer = kafka.KafkaProducer(
+            bootstrap_servers = [BROKER_ADRESS],
+            value_serializer = lambda msg: msg.encode(SETTINGS["message"]["codification"])))
+
+        consumer = kafka.KafkaConsumer(
+            "drone_position",
+            bootstrap_servers = [BROKER_ADRESS],
+            value_deserializer = lambda msg: msg.decode(SETTINGS["message"]["codification"]))
+
+        # drone_position: Producer(Drone), Consumer(Engine); Posiciones individuales de cada dron
+        # drone_target: Producer(Engine), Consumer(Drone); Objetivos individuales de cada dron
+        # drone_list: Producer(Engine), Consumer(Drone); Posiciones y estados de todos los drones
+
+        self.service_spectacle = True
+        while self.service_spectacle:
+            pass
+
+    def start_removal_service(self):
+        self.service_removal = True
+        while self.service_removal:
+            current_time = datetime.datetime.now()
+
+            for key in self.listeners:
+                time_elapsed = (current_time - self.listeners[key]["timestamp"]).total_seconds()
+                if time_elapsed > SETTINGS["message"]["timeout"]:
+                    self.listeners[key].alive = False
+
+            time.sleep(SETTINGS["engine"]["tick"])
+
+    def add_listener(self, key, listener):
+        if self.listeners.has_key(key):
             return False
+        self.listeners[key] = listener
+        return True
 
 class Engine:
     def __init__(self):
@@ -104,26 +219,7 @@ class Engine:
             self.authenticate_drone(drone_socket)
 
     def authenticate_drone(self, drone_socket):
-        client_socket, client_adress = drone_socket.accept()
-        lock = threading.Lock()
 
-        with lock:
-            data = json.loads(client_socket.recv(1024).decode("utf-8"))
-            status = False
-            partition = 0
-            print(f"Request received from {client_adress[0]}:{client_adress[1]}")
-
-            try:
-                if validate_token(data["token"]):
-                    status = True
-                    asigned_target = self.unasigned.pop()
-                    partition = asigned_target["key"]
-                    self.add_listener()
-
-                client_socket.send(json.dumps({"accepted": status, "partition": partition}).encode("utf-8"))
-                client_socket.close()
-            except Exception as e:
-                print(str(e))
 
     def validate_token(token):
         # TODO

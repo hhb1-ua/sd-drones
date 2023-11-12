@@ -1,3 +1,8 @@
+# TODO: Imprimir bien el mapa
+# TODO: Modificar los datos del dron
+# TODO: Borrar el dron de la base de datos
+# TODO: Código de autentificación para operaciones
+
 import json
 import socket
 import sys
@@ -32,17 +37,16 @@ class Drone:
         self.identifier = identifier    # Identificador interno
         self.alias      = alias         # Nombre interno
         self.token      = token         # Código de autentificación
-        self.partition  = None          # Partición asignada
 
         self.x = 0
         self.y = 0
 
         if token is None:
             if not call_repeatedly(self.identity_register):
-                raise Exception("Couldn't connect to registry server.")
+                raise Exception("Couldn't connect to registry server")
 
         if not call_repeatedly(self.identity_authenticate):
-            raise Exception("Couldn't authenticate in engine server.")
+            raise Exception("Couldn't authenticate in engine server")
 
         try:
             threading.Thread(target = self.track_drone_list, args = ()).start()
@@ -55,7 +59,6 @@ class Drone:
             "identifier": self.identifier,
             "alias": self.alias,
             "token": self.token,
-            "partition": self.partition,
             "position": {
                 "x": self.x,
                 "y": self.y
@@ -126,10 +129,7 @@ class Drone:
             response = json.loads(server.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
             server.close()
 
-            if response["accepted"]:
-                self.partition = response["partition"]
-                return True
-            return False
+            return response["accepted"]
 
         except Exception as e:
             raise e
@@ -156,7 +156,7 @@ class Drone:
         consumer = kafka.KafkaConsumer(
             bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
             value_deserializer = lambda msg: msg.decode(SETTINGS["message"]["codification"]))
-        consumer.assign([kafka.TopicPartition("drone_target", self.partition)])
+        consumer.assign([kafka.TopicPartition("drone_target", self.identifier)])
 
         producer = kafka.KafkaProducer(
             bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
@@ -165,7 +165,7 @@ class Drone:
         for message in consumer:
             if not self.step_toward(json.loads(message.value)):
                 print("Couldn't step towards target, out of bounds.")
-            producer.send("drone_position", value = str(self), partition = self.partition)
+            producer.send("drone_position", value = str(self), partition = self.identifier)
 
     def print_map(self, drone_list):
         print(f"Drone <{self.alias}> is currently at ({self.x}, {self.y})")

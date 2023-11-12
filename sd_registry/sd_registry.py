@@ -1,3 +1,5 @@
+# TODO: Código de autentificación para operaciones
+
 import socket
 import json
 import threading
@@ -58,6 +60,13 @@ class Database:
                 return cur.rowcount > 0
         except Exception as e:
             print(str(e))
+            return False
+
+    def validate_drone(self, identifier, token):
+        try:
+            with sqlite3.connect(self.path) as con:
+                return not con.cursor().execute(f"SELECT * FROM Registry WHERE identifier = {identifier} AND token = {token};").fetchone() is None
+        except Exception as e:
             return False
 
 class Registry:

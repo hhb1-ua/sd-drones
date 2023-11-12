@@ -20,7 +20,7 @@
     "message": {
         "length": 1024,
         "codification": "utf-8",
-        "timeout": 16
+        "timeout": 10
     },
     "map": {
         "cols": 20,
@@ -38,7 +38,11 @@
     "engine": {
         "backlog": 10,
         "tick": 2,
-        "database": "registry/registry.db",
+        "registry": "registry/registry.db",
+        "persist": "engine/persist.db",
         "figures": "engine/figures.json"
+    },
+    "broker": {
+        "partitions": 50
     }
 }
