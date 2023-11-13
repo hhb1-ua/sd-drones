@@ -73,7 +73,7 @@ class Listener:
         self.timestamp = datetime.datetime.now()
 
     def finalized(self):
-        return self.alive and self.active and self.positioned
+        return self.positioned or not self.alive or not self.active
 
 class Engine:
     def __init__(self, database_registry, database_persist):
@@ -153,7 +153,7 @@ class Engine:
             bootstrap_servers = [BROKER_ADRESS],
             value_serializer = lambda msg: json.dumps(msg).encode(SETTINGS["message"]["codification"]))
 
-        threading.Thread(target = self.consume_drone_position, args = ()).start()
+        threading.Thread(target = self.track_drone_position, args = ()).start()
 
         self.service_spectacle = True
         while self.service_spectacle:
@@ -207,16 +207,11 @@ class Engine:
 
             producer.send("drone_target", value = target, partition = key)
 
-    def consume_drone_position(self):
+    def track_drone_position(self):
         consumer = kafka.KafkaConsumer(
             "drone_position",
             bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])],
             value_deserializer = lambda msg: json.loads(msg.decode(SETTINGS["message"]["codification"])))
-
-        # partitions = []
-        # for i in range(SETTINGS["broker"]["partitions"]):
-        #     partitions.append(kafka.TopicPartition("drone_position", i))
-        # consumer.assign(partitions)
 
         for message in consumer:
             listener_key = message.value["identifier"]
@@ -226,7 +221,7 @@ class Engine:
                 self.listeners[listener_key].position = message.value["position"]
 
                 if self.figure is not None and self.listeners[listener_key].active:
-                    self.listeners[listener_key].positioned = message.value["position"] is self.figure.drones[listener_key]
+                    self.listeners[listener_key].positioned = message.value["position"] == self.figure.drones[listener_key]
                 else:
                     self.listeners[listener_key].positioned = False
 

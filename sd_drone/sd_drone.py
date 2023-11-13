@@ -1,8 +1,3 @@
-# TODO: Imprimir bien el mapa
-# TODO: Modificar los datos del dron
-# TODO: Borrar el dron de la base de datos
-# TODO: Código de autentificación para operaciones
-
 import json
 import socket
 import sys
@@ -150,6 +145,7 @@ class Drone:
             consumer_timeout_ms = SETTINGS["message"]["timeout"] * 1000)
 
         for message in consumer:
+            os.system("clear")
             print(message.value["map"])
 
     def track_drone_target(self):
