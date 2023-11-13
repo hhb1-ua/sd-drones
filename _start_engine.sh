@@ -8,6 +8,7 @@ konsole\
     --hold\
     -e\
     docker run\
+    --name "sd_engine"\
     --volume "$(pwd)/sd_volume/settings/":"/app/settings/"\
     --volume "$(pwd)/sd_volume/registry/":"/app/registry/"\
     --volume "$(pwd)/sd_volume/engine/":"/app/engine/"\

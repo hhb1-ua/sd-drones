@@ -11,8 +11,6 @@ network="sd-drones_engine-network"
 #     esac
 # done
 
-echo $token
-
 docker\
     &> /dev/null\
     build\
@@ -31,6 +29,7 @@ konsole\
     --volume "$(pwd)/sd_volume/settings/":"/app/settings/"\
     --network $network\
     --network-alias $alias\
+    --publish-all\
     $alias\
     &
 

@@ -38,6 +38,7 @@ do
         --volume "$(pwd)/sd_volume/settings/":"/app/settings/"\
         --network $network\
         --network-alias $alias\
+        --publish-all\
         $container\
         &
 done

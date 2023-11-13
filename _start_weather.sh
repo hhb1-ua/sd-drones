@@ -12,5 +12,6 @@ konsole\
     --volume "$(pwd)/sd_volume/weather/":"/app/weather/"\
     --network sd-drones_engine-network\
     --network-alias weather\
+    --publish-all\
     sd_weather\
     &

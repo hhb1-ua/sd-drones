@@ -12,5 +12,6 @@ konsole\
     --volume "$(pwd)/sd_volume/registry/":"/app/registry/"\
     --network sd-drones_engine-network\
     --network-alias registry\
+    --publish "9010:9010"\
     sd_registry\
     &
