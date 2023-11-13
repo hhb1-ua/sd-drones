@@ -24,6 +24,7 @@ def get_figures(path):
                     t = drone["POS"].split(",")
                     target = {"x": int(t[0]), "y": int(t[1])}
                     figure.add_drone(int(drone["ID"]), target)
+                figure_list.append(figure)
             return figure_list
     except Exception as e:
         return None
@@ -49,7 +50,7 @@ class Figure:
         self.name   = name
         self.drones = {}
 
-    def add_drone(identifier, position):
+    def add_drone(self, identifier, position):
         if self.drones.get(identifier) is not None:
             return False
         self.drones[identifier] = position
@@ -58,7 +59,7 @@ class Figure:
 class Listener:
     def __init__(self):
         # Información del dron
-        self.position   = None
+        self.position   = {"x": 0, "y": 0}
 
         # Información de escucha
         self.timestamp  = None
@@ -134,6 +135,11 @@ class Engine:
                     if self.database_registry.validate_drone(data["identifier"], data["token"]):
                         if self.add_listener(data["identifier"], Listener()):
                             status = True
+                            # Figura en progreso, comprobar si se debe activar el dron
+                            if self.figure is not None:
+                                if self.figure.drones.get(data["identifier"]) is not None:
+                                    self.listeners[data["identifier"]].active = True
+
                     drone_socket.send(json.dumps({"accepted": status}).encode(SETTINGS["message"]["codification"]))
             except Exception as e:
                 print(f"The request couldn't be handled properly ({str(e)})")
@@ -147,19 +153,14 @@ class Engine:
             bootstrap_servers = [BROKER_ADRESS],
             value_serializer = lambda msg: json.dumps(msg).encode(SETTINGS["message"]["codification"]))
 
-        consumer = kafka.KafkaConsumer(
-            "drone_position",
-            bootstrap_servers = [BROKER_ADRESS],
-            value_deserializer = lambda msg: json.loads(msg.decode(SETTINGS["message"]["codification"])))
-
-        threading.Thread(target = self.consume_drone_position, args = (consumer)).start()
+        threading.Thread(target = self.consume_drone_position, args = ()).start()
 
         self.service_spectacle = True
         while self.service_spectacle:
             # Leer el archivo de figuras
             if self.figure is None and len(self.queue) == 0:
                 figures = get_figures(SETTINGS["engine"]["figures"])
-                if not figures is None:
+                if figures is not None:
                     self.queue = figures
                 self.publish_drone_target(producer)
             # Ejecutar las figuras
@@ -168,7 +169,12 @@ class Engine:
                 if self.figure is None:
                     self.figure = self.queue.pop(0)
 
-                # Publicar información
+                    for key in self.listeners:
+                        if self.figure.drones.get(key) is not None:
+                            self.listeners[key].active = True
+                        else:
+                            self.listeners[key].active = False
+
                 self.publish_drone_list(producer)
                 self.publish_drone_target(producer)
 
@@ -201,15 +207,28 @@ class Engine:
 
             producer.send("drone_target", value = target, partition = key)
 
-    def consume_drone_position(self, consumer):
+    def consume_drone_position(self):
+        consumer = kafka.KafkaConsumer(
+            "drone_position",
+            bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])],
+            value_deserializer = lambda msg: json.loads(msg.decode(SETTINGS["message"]["codification"])))
+
+        # partitions = []
+        # for i in range(SETTINGS["broker"]["partitions"]):
+        #     partitions.append(kafka.TopicPartition("drone_position", i))
+        # consumer.assign(partitions)
+
         for message in consumer:
             listener_key = message.value["identifier"]
-            print(f"Consumed a message from drone with identifier <{listener_key}>") # TODO
 
             if self.listeners.get(listener_key) is not None:
                 self.listeners[listener_key].stamp()
                 self.listeners[listener_key].position = message.value["position"]
-                self.listeners[listener_key].positioned = message.value["position"] is self.figure.drones[listener_key].target
+
+                if self.figure is not None and self.listeners[listener_key].active:
+                    self.listeners[listener_key].positioned = message.value["position"] is self.figure.drones[listener_key]
+                else:
+                    self.listeners[listener_key].positioned = False
 
     def start_removal_service(self):
         self.service_removal = True
@@ -255,25 +274,27 @@ class Engine:
             admin.create_partitions({topic: kafka.admin.new_partitions.NewPartitions(number)})
 
     def get_colored_positions(self):
-        positions = []
+        positions = {}
 
         for key in self.listeners:
             listener = self.listeners[key]
+            position = f"{listener.position['x']}.{listener.position['y']}"
+
             # Ignorar los drones fuera de uso
             if not listener.active:
                 continue
             # Marcar los drones muertos como grises
             if not listener.alive:
-                if not positions.get(listener.position) is not None:
-                    positions[listener.position] = 0
+                if not position in positions:
+                    positions[position] = 0
                 continue
             # Marcar los drones en movimiento como rojos
             if not listener.positioned:
-                if not positions.get(listener.position) is not None:
-                    positions[listener.position] = 1
+                if not position in positions:
+                    positions[position] = 1
                 continue
             # Marcar los drones posicionados como verdes
-            positions[listener.position] = 2
+            positions[position] = 2
 
         return positions
 
@@ -283,9 +304,9 @@ class Engine:
 
         for i in range(SETTINGS["map"]["rows"]):
             for j in range(SETTINGS["map"]["cols"]):
-                key = {"x": j, "y": i}
+                key = f"{j}.{i}"
 
-                if positions.get(key) is not None:
+                if key in positions:
                     match positions[key]:
                         case 0:
                             result += "\033[37m*\033[0m "

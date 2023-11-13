@@ -163,7 +163,6 @@ class Drone:
             value_serializer = lambda msg: msg.encode(SETTINGS["message"]["codification"]))
 
         for message in consumer:
-            print(f"Received target {message.value}")
             if not self.step_toward(message.value):
                 print("Couldn't step towards target, out of bounds")
             producer.send("drone_position", value = str(self), partition = self.identifier)

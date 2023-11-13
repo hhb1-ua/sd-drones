@@ -1,5 +1,5 @@
 #!/bin/bash
-start=0
+start=1
 number=1
 network="sd-drones_engine-network"
 
