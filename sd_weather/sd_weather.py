@@ -40,11 +40,12 @@ class Weather:
                 while notification:
                     try:
                         self.send_notification()
+                        break
                     except:
                         if timer <= SETTINGS["message"]["timeout"]:
                             print(f"Couldn't send notification, retrying in {timer} seconds...")
                             time.sleep(timer)
-                            timer *= 2
+                            timer += 2
                         else:
                             print("Connection lost")
                             break
@@ -72,7 +73,7 @@ class Weather:
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server.connect((SETTINGS["adress"]["weather"]["host"], SETTINGS["adress"]["weather"]["port"]))
-            server.send(json.dumps({"safe": self.safe}).encode("utf-8"))
+            server.send(json.dumps({"safe": self.safe}).encode(SETTINGS["message"]["codification"]))
             server.close()
         except Exception as e:
             raise e

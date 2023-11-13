@@ -1,22 +1,23 @@
 #!/bin/bash
 identifier=$1
 alias=$2
-token=null
+token=$3
 network="sd-drones_engine-network"
-container="ct_$alias"
 
-while getopts t: flag
-do
-    case $flag in
-        t) token=$OPTARG;;
-    esac
-done
+# while getopts t: flag
+# do
+#     case $flag in
+#         t) token=$OPTARG;;
+#     esac
+# done
+
+echo $token
 
 docker\
     &> /dev/null\
     build\
     --rm\
-    -t $container\
+    -t $alias\
     --build-arg IDENTIFIER=$identifier\
     --build-arg ALIAS=$alias\
     --build-arg TOKEN=$token\
@@ -30,6 +31,6 @@ konsole\
     --volume "$(pwd)/sd_volume/settings/":"/app/settings/"\
     --network $network\
     --network-alias $alias\
-    $container\
+    $alias\
     &
 

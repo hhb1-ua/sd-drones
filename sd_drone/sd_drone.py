@@ -139,10 +139,10 @@ class Drone:
 
     def track_drone_list(self):
         consumer = kafka.KafkaConsumer(
-            "drone_list",
             bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
             value_deserializer = lambda msg: json.loads(msg.decode(SETTINGS["message"]["codification"])),
             consumer_timeout_ms = SETTINGS["message"]["timeout"] * 1000)
+        consumer.assign([kafka.TopicPartition("drone_list", 0)])
 
         for message in consumer:
             os.system("clear")
@@ -179,8 +179,8 @@ if __name__ == "__main__":
         if len(sys.argv) == 3:
             DRONE = Drone(int(sys.argv[1]), str(sys.argv[2]))
         else:
-            if str(sys.argv[3]) == "null":
-                DRONE = Drone(int(sys.argv[1]), str(sys.argv[2]))
+            if sys.argv[3] == "null":
+                DRONE = Drone(int(sys.argv[1]), sys.argv[2])
             else:
                 DRONE = Drone(int(sys.argv[1]), str(sys.argv[2]), str(sys.argv[3]))
         print(f"Successfully created drone <{DRONE.alias}> with identifier <{DRONE.identifier}>")
