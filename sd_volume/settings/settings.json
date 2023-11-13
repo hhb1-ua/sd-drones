@@ -1,0 +1,48 @@
+{
+    "adress": {
+        "registry": {
+            "host": "registry",
+            "port": 9010
+        },
+        "authentication": {
+            "host": "engine",
+            "port": 9020
+        },
+        "weather": {
+            "host": "engine",
+            "port": 9030
+        },
+        "broker": {
+            "host": "kafka",
+            "port": 9092
+        }
+    },
+    "message": {
+        "length": 1024,
+        "codification": "utf-8",
+        "timeout": 10
+    },
+    "map": {
+        "cols": 20,
+        "rows": 20
+    },
+    "weather": {
+        "threshold": 0,
+        "tick": 2,
+        "database": "weather/weather.json"
+    },
+    "registry": {
+        "backlog": 10,
+        "database": "registry/registry.db"
+    },
+    "engine": {
+        "backlog": 10,
+        "tick": 2,
+        "registry": "registry/registry.db",
+        "persist": "engine/persist.db",
+        "figures": "engine/figures.json"
+    },
+    "broker": {
+        "partitions": 50
+    }
+}

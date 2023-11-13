@@ -1,171 +1,329 @@
+# TODO: Base de datos de persistencia
+
 import json
 import socket
 import sys
 import os
 import kafka
 import datetime
+import threading
+import time
+import sqlite3
 
-ENGINE_ADRESS = ("engine", 9010)
-REGISTRY_ADRESS =  ("registry", 9020)
-BROKER_ADRESS =  ("kafka", 9092)
-CONNECTION_TIMEOUT = 20
+SETTINGS    = None
+ENGINE      = None
 
-def read_figure_file(source):
-    figures = []
-    with open(source, "r") as _file:
-        raw = json.loads(_file.read())
-        for f in raw["figuras"]:
-            figure = {}
-            figure["name"] = f["Nombre"]
-            figure["drones"] = []
-            for d in f["Drones"]:
-                coords = d["POS"].split(",")
-                figure["drones"].push({"identifier": d["ID"], "target": {"x": coords[0], "y": coords[1]}})
-    return figures
+def get_figures(path):
+    try:
+        with open(path, "r") as figure_file:
+            figure_data = json.loads(figure_file.read())
+            figure_list = []
+            for f in figure_data["figuras"]:
+                figure = Figure(f["Nombre"])
+                for drone in f["Drones"]:
+                    t = drone["POS"].split(",")
+                    target = {"x": int(t[0]), "y": int(t[1])}
+                    figure.add_drone(int(drone["ID"]), target)
+                figure_list.append(figure)
+            return figure_list
+    except Exception as e:
+        return None
 
-class Listener:
-    def __init__(self, partition):
-        """
-        :partition:     Partición de escucha
-        :timestamp:     Hora de la última trama recibida
-        :status:        Estado de la conexión
-        :identifier:    Identificador externo
-        :position:      Posición actual
-        :target:        Posición final
-        """
-        self.partition  = partition
-        self.timestamp  = None
-        self.status     = True
-        self.identifier = None
-        self.position   = None
-        self.target     = None
+class RegistryDatabase:
+    def __init__(self, path):
+        self.path = path
 
-class Engine:
-    def __init__(self):
-        self.listeners  = {} # Diccionario que relaciona la llave de objetivo del dron con su información
-        self.unasigned  = [] # Lista de llaves de objetivo que aún no han sido asignadas
-        self.socket     = None
-        self.lock       = None
-        self.auth       = False
-        self.loop       = False
-
-    def add_listener(self, key, listener):
-        if self.listeners.has_key(key):
+    def validate_drone(self, identifier, token):
+        try:
+            with sqlite3.connect(self.path) as con:
+                return not con.cursor().execute(f"SELECT * FROM Registry WHERE identifier = {identifier} AND token = '{token}';").fetchone() is None
+        except Exception as e:
+            print(str(e))
             return False
 
+class PersistDatabase:
+    def __init__(self, path):
+        self.path = path
+
+class Figure:
+    def __init__(self, name):
+        self.name   = name
+        self.drones = {}
+
+    def add_drone(self, identifier, position):
+        if self.drones.get(identifier) is not None:
+            return False
+        self.drones[identifier] = position
+        return True
+
+class Listener:
+    def __init__(self):
+        # Información del dron
+        self.position   = {"x": 0, "y": 0}
+
+        # Información de escucha
+        self.timestamp  = None
+        self.alive      = True
+        self.active     = False
+        self.positioned = False
+
+        self.stamp()
+
+    def stamp(self):
+        self.timestamp = datetime.datetime.now()
+
+    def finalized(self):
+        return self.positioned or not self.alive or not self.active
+
+class Engine:
+    def __init__(self, database_registry, database_persist):
+        self.figure     = None
+        self.queue      = []
+        self.listeners  = {}
+        self.safe       = True
+
+        # Bases de datos
+        self.database_registry   = database_registry
+        self.database_persist    = database_persist
+
+        # Servicios activos
+        self.service_authentication = False
+        self.service_weather        = False
+        self.service_spectacle      = False
+        self.service_removal        = False
+
+        self.set_partitions("drone_position", SETTINGS["broker"]["partitions"])
+        self.set_partitions("drone_target", SETTINGS["broker"]["partitions"])
+        self.set_partitions("drone_list", 1)
+
+        threading.Thread(target = self.start_authentication_service, args = ()).start()
+        threading.Thread(target = self.start_weather_service, args = ()).start()
+        threading.Thread(target = self.start_removal_service, args = ()).start()
+        threading.Thread(target = self.start_spectacle_service, args = ()).start()
+
+    def start_weather_service(self):
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.bind((SETTINGS["adress"]["weather"]["host"], SETTINGS["adress"]["weather"]["port"]))
+        server_socket.listen(SETTINGS["engine"]["backlog"])
+
+        self.service_weather = True
+        while self.service_weather:
+            weather_socket, weather_adress = server_socket.accept()
+            print(f"Request received from weather server at {weather_adress[0]}:{weather_adress[1]}")
+            try:
+                with threading.Lock() as lock:
+                    self.safe = json.loads(weather_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))["safe"]
+            except Exception as e:
+                print(f"The request couldn't be handled properly ({str(e)})")
+            finally:
+                weather_socket.close()
+
+    def start_authentication_service(self):
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.bind((SETTINGS["adress"]["authentication"]["host"], SETTINGS["adress"]["authentication"]["port"]))
+        server_socket.listen(SETTINGS["engine"]["backlog"])
+
+        self.service_authentication = True
+        while self.service_authentication:
+            drone_socket, drone_adress = server_socket.accept()
+            print(f"Request received from drone at {drone_adress[0]}:{drone_adress[1]}")
+            try:
+                with threading.Lock():
+                    data = json.loads(drone_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
+                    status = False
+
+                    if self.database_registry.validate_drone(data["identifier"], data["token"]):
+                        if self.add_listener(data["identifier"], Listener()):
+                            status = True
+                            # Figura en progreso, comprobar si se debe activar el dron
+                            if self.figure is not None:
+                                if self.figure.drones.get(data["identifier"]) is not None:
+                                    self.listeners[data["identifier"]].active = True
+
+                    drone_socket.send(json.dumps({"accepted": status}).encode(SETTINGS["message"]["codification"]))
+            except Exception as e:
+                print(f"The request couldn't be handled properly ({str(e)})")
+            finally:
+                drone_socket.close()
+
+    def start_spectacle_service(self):
+        BROKER_ADRESS = SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])
+
+        producer = kafka.KafkaProducer(
+            bootstrap_servers = [BROKER_ADRESS],
+            value_serializer = lambda msg: json.dumps(msg).encode(SETTINGS["message"]["codification"]))
+
+        threading.Thread(target = self.track_drone_position, args = ()).start()
+
+        self.service_spectacle = True
+        while self.service_spectacle:
+            # Leer el archivo de figuras
+            if self.figure is None and len(self.queue) == 0:
+                figures = get_figures(SETTINGS["engine"]["figures"])
+                if figures is not None:
+                    self.queue = figures
+                self.publish_drone_target(producer)
+            # Ejecutar las figuras
+            else:
+                # Avanzar en la cola
+                if self.figure is None:
+                    self.figure = self.queue.pop(0)
+
+                    for key in self.listeners:
+                        if self.figure.drones.get(key) is not None:
+                            self.listeners[key].active = True
+                        else:
+                            self.listeners[key].active = False
+
+                self.publish_drone_list(producer)
+                self.publish_drone_target(producer)
+
+                # Imprimir mapa
+                print(f"Currently printing figure <{self.figure.name}>")
+                print(str(self))
+
+                # Comprobar si la figura ha acabado
+                finished = True
+                for key in self.listeners:
+                    if not self.listeners[key].finalized():
+                        finished = False
+                        break
+                if finished:
+                    self.figure = None
+
+            time.sleep(SETTINGS["engine"]["tick"])
+
+    def publish_drone_list(self, producer):
+        producer.send("drone_list", value = {"map": str(self)})
+
+    def publish_drone_target(self, producer):
+        for key in self.listeners:
+            target = {"x": 0, "y": 0}
+
+            if not self.figure is None and self.safe:
+                if self.listeners[key].active:
+                    if self.figure.drones.get(key) is not None:
+                        target = self.figure.drones[key]
+
+            producer.send("drone_target", value = target, partition = key)
+
+    def track_drone_position(self):
+        consumer = kafka.KafkaConsumer(
+            "drone_position",
+            bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])],
+            value_deserializer = lambda msg: json.loads(msg.decode(SETTINGS["message"]["codification"])))
+
+        for message in consumer:
+            listener_key = message.value["identifier"]
+
+            if self.listeners.get(listener_key) is not None:
+                self.listeners[listener_key].stamp()
+                self.listeners[listener_key].position = message.value["position"]
+
+                if self.figure is not None and self.listeners[listener_key].active:
+                    self.listeners[listener_key].positioned = message.value["position"] == self.figure.drones[listener_key]
+                else:
+                    self.listeners[listener_key].positioned = False
+
+    def start_removal_service(self):
+        self.service_removal = True
+        while self.service_removal:
+            current_time = datetime.datetime.now()
+
+            for key in self.listeners:
+                time_elapsed = (current_time - self.listeners[key].timestamp).total_seconds()
+
+                if self.listeners[key].alive:
+                    if time_elapsed > SETTINGS["message"]["timeout"]:
+                        print(f"Connection lost to drone with identifier <{key}>")
+                        self.listeners[key].alive = False
+                else:
+                    if time_elapsed <= SETTINGS["message"]["timeout"]:
+                        print(f"Connection established to drone with identifier <{key}>")
+                        self.listeners[key].alive = True
+
+            time.sleep(SETTINGS["engine"]["tick"])
+
+    def add_listener(self, key, listener):
+        if self.listeners.get(key) is not None:
+            return False
         self.listeners[key] = listener
         return True
 
-    def initialize_authentication_service(self):
+    def get_partitions(self, topic):
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.bind(ENGINE_ADRESS)
-            self.socket.listen(5)
-        except Exception as e:
-            raise e
+            consumer = kafka.KafkaConsumer(
+                bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+            return len(consumer.partitions_for_topic(topic))
+        except:
+            return None
 
-        self.lock = threading.Lock()
-        self.auth = True
+    def set_partitions(self, topic, number):
+        admin = kafka.KafkaAdminClient(
+            bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+        current_partitions = self.get_partitions(topic)
 
-        while self.auth:
-            authenticate_drone()
+        if current_partitions is None:
+            admin.create_topics(new_topics = [kafka.admin.NewTopic(name = topic, num_partitions = number, replication_factor = 1)])
+        elif current_partitions != number:
+            admin.create_partitions({topic: kafka.admin.new_partitions.NewPartitions(number)})
 
-    def authenticate_drone(self):
-        client_socket, client_adress = self.socket.accept()
-
-        with self.lock:
-            data = json.loads(client_socket.recv(1024).decode("utf-8"))
-            status = False
-            partition = 0
-            print(f"Request received from {client_adress[0]}:{client_adress[1]}")
-
-            try:
-                if validate_token(data["token"]):
-                    status = True
-                    asigned_target = self.unasigned.pop()
-                    partition = asigned_target["key"]
-                    self.add_listener()
-
-                client_socket.send(json.dumps({"accepted": status, "partition": partition}).encode("utf-8"))
-                client_socket.close()
-            except Exception as e:
-                print(str(e))
-
-    def validate_token(token):
-        # TODO
-        return True
-
-    def publish_drone_list(self):
-        producer = kafka.KafkaProducer(
-            bootstrap_servers = [BROKER_ADRESS],
-            value_serializer = lambda message: message.encode("utf-8"))
-
-        drone_list = {}
-        for key in self.listeners:
-            drone_list[self.listeners[key]["identifier"]] = self.listeners[key]["position"]
-
-        producer.send("drone_list", value = json.dumps(drone_list))
-
-    def publish_targets(self):
-        producer = kafka.KafkaProducer(
-            bootstrap_servers = [BROKER_ADRESS],
-            value_serializer = lambda message: message.encode("utf-8"))
+    def get_colored_positions(self):
+        positions = {}
 
         for key in self.listeners:
-            producer.send(
-                "drone_list",
-                value = json.dumps({
-                    "x": self.listeners[key]["target"]["x"],
-                    "y": self.listeners[key]["target"]["y"]}),
-                partition = self.listeners[key]["partition"])
+            listener = self.listeners[key]
+            position = f"{listener.position['x']}.{listener.position['y']}"
 
-    def delete_listener(self, key):
-        if not self.listeners.has_key(key):
-            return False
-        del self.listeners[key]
-        return True
+            # Ignorar los drones fuera de uso
+            if not listener.active:
+                continue
+            # Marcar los drones muertos como grises
+            if not listener.alive:
+                if not position in positions:
+                    positions[position] = 0
+                continue
+            # Marcar los drones en movimiento como rojos
+            if not listener.positioned:
+                if not position in positions:
+                    positions[position] = 1
+                continue
+            # Marcar los drones posicionados como verdes
+            positions[position] = 2
 
-    def delete_dead_drones(self):
-        while self.loop:
-            for key in self.listeners:
-                timer = self.listeners[key]["timestamp"] - datetime.datetime.now()
-                if timer.total_seconds() > CONNECTION_TIMEOUT:
-                    print(f"Drone {self.listeners[key]['identifier']} has been removed due to a timeout")
-                    delete_ilstener(key)
-            time.sleep(2)
+        return positions
 
-    def track_weather(self):
-        # TODO
-        pass
+    def __str__(self):
+        positions = self.get_colored_positions()
+        result = ""
 
-    def display_drones(self):
-        # TODO
-        pass
+        for i in range(SETTINGS["map"]["rows"]):
+            for j in range(SETTINGS["map"]["cols"]):
+                key = f"{j}.{i}"
 
-    def track_drones(self):
-        consumer = kafka.KafkaConsumer(
-            "drone_position",
-            bootstrap_servers = [f"{BROKER_ADRESS[0]}:{BROKER_ADRESS[1]}"],
-            value_deserializer = lambda msg: msg.decode("utf-8"),
-            consumer_timeout_ms = CONNECTION_TIMEOUT * 1000
-        )
+                if key in positions:
+                    match positions[key]:
+                        case 0:
+                            result += "\033[37m*\033[0m "
+                        case 1:
+                            result += "\033[31m*\033[0m "
+                        case 2:
+                            result += "\033[32m*\033[0m "
+                        case _:
+                            result += "? "
+                else:
+                    result += ". "
+            result += "\n"
 
-        for message in consumer:
-            key = message.partition
-            data = json.loads(message.value)
-            timestamp = datetime.strptime(message.timestamp, "%y-%m-%d %H:%M:%S")
-
-            if self.listeners.has_key(key):
-                self.listeners[key].timestamp = timestamp
-                self.listeners[key].position = data["position"]
-
-    def initialize_engine_service(self):
-        # Primero, debemos tener una figura para leer
+        return result
 
 if __name__ == "__main__":
-    engine = Engine()
+    try:
+        with open("settings/settings.json", "r") as settings_file:
+            SETTINGS = json.loads(settings_file.read())
+    except Exception as e:
+        print("Could not load settings file 'settings.json', shutting down")
+        quit()
 
-    threading.Thread(target = engine.initialize_authentication_service, args = None).start()
-    threading.Thread(target = engine.initialize_engine_service, args = None).start()
-
-    print("Hello world?")
+    ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]))
+    print("Engine server has been successfully created")
