@@ -45,6 +45,53 @@ class PersistDatabase:
     def __init__(self, path):
         self.path = path
 
+    def save_data(self, figure, queue, listeners, safe):
+        try:
+            drones = {}
+            for key in listeners:
+                listener = listeners[key]
+                drones[key] = {
+                    "position": listener.position,
+                    "alive": listener.alive,
+                    "active": listener.active,
+                    "positioned": listener.positioned}
+
+            with open(self.path, "w") as data:
+                data.write(json.dumps({
+                    "figure": figure,
+                    "queue": queue,
+                    "drones": drones,
+                    "safe": safe}))
+
+            return True
+        except Exception as e:
+            print(str(e))
+            quit()
+            raise e
+
+    def load_data(self):
+        try:
+            with open(self.path, "r") as backup:
+                data = json.loads(backup.read())
+
+                data["listeners"] = {}
+                for key in data["drones"]:
+                    drone = data["drones"][key]
+
+                    listener = Listener()
+                    listener.position = drone["position"]
+                    listener.alive = drone["alive"]
+                    listener.active = drone["active"]
+                    listener.positioned = drone["positioned"]
+
+                    data["listeners"][int(key)] = listener
+
+                return data
+        except Exception as e:
+            print(str(e))
+            quit()
+            return None
+
 class Figure:
     def __init__(self, name):
         self.name   = name
@@ -76,7 +123,7 @@ class Listener:
         return self.positioned or not self.alive or not self.active
 
 class Engine:
-    def __init__(self, database_registry, database_persist):
+    def __init__(self, database_registry, database_persist, reload_backup = False):
         self.figure     = None
         self.queue      = []
         self.listeners  = {}
@@ -95,6 +142,15 @@ class Engine:
         self.set_partitions("drone_position", SETTINGS["broker"]["partitions"])
         self.set_partitions("drone_target", SETTINGS["broker"]["partitions"])
         self.set_partitions("drone_list", 1)
+
+        # Recargar información previa
+        if reload_backup:
+            data = self.database_persist.load_data()
+
+            self.figure     = data["figure"]
+            self.queue      = data["queue"]
+            self.listeners  = data["listeners"]
+            self.safe       = data["safe"]
 
         threading.Thread(target = self.start_authentication_service, args = ()).start()
         threading.Thread(target = self.start_weather_service, args = ()).start()
@@ -214,6 +270,9 @@ class Engine:
                 p_y = fill_left(str(listener.position["y"]), 2)
 
                 print(f"<{key}> ({p_x}, {p_y}) {status}")
+
+            # Hacer una copia de seguridad
+            self.database_persist.save_data(self.figure, self.queue, self.listeners, self.safe)
 
             time.sleep(SETTINGS["engine"]["tick"])
 
@@ -342,6 +401,10 @@ class Engine:
         return result
 
 if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <reload>")
+        quit()
+
     try:
         with open("settings/settings.json", "r") as settings_file:
             SETTINGS = json.loads(settings_file.read())
@@ -349,4 +412,8 @@ if __name__ == "__main__":
         print("Could not load settings file 'settings.json', shutting down")
         quit()
 
-    ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]))
+    if int(sys.argv[1]) == 1:
+        print("Reloading persist...")
+        ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]), True)
+    else:
+        ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]), False)
