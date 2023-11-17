@@ -1,5 +1,3 @@
-# TODO: Base de datos de persistencia
-
 import json
 import socket
 import sys
@@ -29,6 +27,9 @@ def get_figures(path):
     except Exception as e:
         return None
 
+def fill_left(string, length):
+    return "0" * (len(string) - length) + string
+
 class RegistryDatabase:
     def __init__(self, path):
         self.path = path
@@ -38,7 +39,6 @@ class RegistryDatabase:
             with sqlite3.connect(self.path) as con:
                 return not con.cursor().execute(f"SELECT * FROM Registry WHERE identifier = {identifier} AND token = '{token}';").fetchone() is None
         except Exception as e:
-            print(str(e))
             return False
 
 class PersistDatabase:
@@ -130,17 +130,24 @@ class Engine:
             try:
                 with threading.Lock():
                     data = json.loads(drone_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
+
                     status = False
+                    position = {"x": 0, "y": 0}
 
                     if self.database_registry.validate_drone(data["identifier"], data["token"]):
                         if self.add_listener(data["identifier"], Listener()):
+                            # El dron no se había conectado previamente
                             status = True
                             # Figura en progreso, comprobar si se debe activar el dron
                             if self.figure is not None:
                                 if self.figure.drones.get(data["identifier"]) is not None:
                                     self.listeners[data["identifier"]].active = True
+                        else:
+                            # El dron ya existía y se está reconectando
+                            status = True
+                            position = self.listeners[data["identifier"]].position
 
-                    drone_socket.send(json.dumps({"accepted": status}).encode(SETTINGS["message"]["codification"]))
+                    drone_socket.send(json.dumps({"accepted": status, "position": position}).encode(SETTINGS["message"]["codification"]))
             except Exception as e:
                 print(f"The request couldn't be handled properly ({str(e)})")
             finally:
@@ -157,8 +164,11 @@ class Engine:
 
         self.service_spectacle = True
         while self.service_spectacle:
+            print("\033c", end = "")
+
             # Leer el archivo de figuras
             if self.figure is None and len(self.queue) == 0:
+                print("Awaiting for 'figures.json' file")
                 figures = get_figures(SETTINGS["engine"]["figures"])
                 if figures is not None:
                     self.queue = figures
@@ -178,8 +188,8 @@ class Engine:
                 self.publish_drone_list(producer)
                 self.publish_drone_target(producer)
 
-                # Imprimir mapa
-                print(f"Currently printing figure <{self.figure.name}>")
+                # Imprimir mapa e información
+                print(f"Printing figure <{self.figure.name}>")
                 print(str(self))
 
                 # Comprobar si la figura ha acabado
@@ -190,6 +200,20 @@ class Engine:
                         break
                 if finished:
                     self.figure = None
+
+            # Imprimir la lista de drones
+            for key in self.listeners:
+                listener = self.listeners[key]
+
+                status = "Alive"
+                if not listener.alive:
+                    status = "Dead"
+
+                key = fill_left(str(key), 2)
+                p_x = fill_left(str(listener.position["x"]), 2)
+                p_y = fill_left(str(listener.position["y"]), 2)
+
+                print(f"<{key}> ({p_x}, {p_y}) {status}")
 
             time.sleep(SETTINGS["engine"]["tick"])
 
@@ -326,4 +350,3 @@ if __name__ == "__main__":
         quit()
 
     ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]))
-    print("Engine server has been successfully created")

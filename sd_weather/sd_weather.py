@@ -88,6 +88,7 @@ if __name__ == "__main__":
 
     try:
         WEATHER = Weather()
+        print("Weather service has been successfully started")
     except Exception as e:
         print("Service stopped abruptly, shutting down")
         quit()

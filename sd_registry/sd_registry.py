@@ -1,5 +1,3 @@
-# TODO: Código de autentificación para operaciones
-
 import socket
 import json
 import threading
@@ -130,6 +128,5 @@ if __name__ == "__main__":
         REGISTRY = Registry(Database(SETTINGS["registry"]["database"]))
         print("Registry server has been successfully started")
     except Exception as e:
-        print(str(e))
         print("Service stopped abruptly, shutting down")
         quit()

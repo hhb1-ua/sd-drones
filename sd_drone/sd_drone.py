@@ -124,6 +124,11 @@ class Drone:
             response = json.loads(server.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
             server.close()
 
+            # Asignar nueva posición
+            if response["accepted"]:
+                self.x = response["position"]["x"]
+                self.y = response["position"]["y"]
+
             return response["accepted"]
 
         except Exception as e:
@@ -145,8 +150,10 @@ class Drone:
         consumer.assign([kafka.TopicPartition("drone_list", 0)])
 
         for message in consumer:
-            os.system("clear")
+            print("\033c", end = "")
+            print(f"Drone <{self.identifier}> with alias <{self.alias}> is currently at ({self.x}, {self.y})")
             print(message.value["map"])
+
 
     def track_drone_target(self):
         consumer = kafka.KafkaConsumer(
