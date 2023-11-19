@@ -138,11 +138,15 @@ class Engine:
         self.figure     = None
         self.queue      = []
         self.listeners  = {}
-        self.safe       = True
 
         # Bases de datos
         self.database_registry   = database_registry
         self.database_persist    = database_persist
+
+        # Servicio de clima
+        self.safe   = True
+        self.alive  = True
+        self.stamp  = datetime.datetime.now()
 
         # Servicios activos
         self.service_authentication = False
@@ -167,6 +171,7 @@ class Engine:
         threading.Thread(target = self.start_weather_service, args = ()).start()
         threading.Thread(target = self.start_removal_service, args = ()).start()
         threading.Thread(target = self.start_spectacle_service, args = ()).start()
+        threading.Thread(target = self.track_weather_timeout, args = ()).start()
 
     def start_weather_service(self):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -180,10 +185,23 @@ class Engine:
             try:
                 with threading.Lock() as lock:
                     self.safe = json.loads(weather_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))["safe"]
+                    self.stamp = datetime.datetime.now()
             except Exception as e:
                 print(f"The request couldn't be handled properly ({str(e)})")
             finally:
                 weather_socket.close()
+
+    def track_weather_timeout(self):
+        while self.service_weather:
+            time_elapsed = (datetime.datetime.now() - self.stamp).total_seconds()
+
+            if self.alive and time_elapsed > SETTINGS["message"]["timeout"]:
+                self.alive = False
+                self.safe = False
+            elif not self.alive and time_elapsed <= SETTINGS["message"]["timeout"]:
+                self.alive = True
+
+            time.sleep(SETTINGS["engine"]["tick"])
 
     def start_authentication_service(self):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -272,6 +290,8 @@ class Engine:
             weather = "SAFE"
             if not self.safe:
                 weather = "DANGEROUS"
+            if not self.alive:
+                weather = "UNKNOWN"
             print(f"Weather status: {weather}")
 
             # Imprimir la lista de drones

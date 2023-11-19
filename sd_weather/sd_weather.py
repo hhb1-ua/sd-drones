@@ -22,33 +22,38 @@ class Weather:
         try:
             while self.service:
                 temperature = self.get_temperature()
-                notification = False
+                # notification = False
 
                 if self.safe and temperature < SETTINGS["weather"]["threshold"]:
                     # La temperatura ha pasado a estar fuera del umbral
                     self.safe = False
-                    notification = True
-                    print("The temperature has become unsafe, sending notification")
+                    # notification = True
+                    print(f"The temperature is now dangerous ({temperature}ºC)")
 
                 elif not self.safe and temperature >= SETTINGS["weather"]["threshold"]:
                     # La temperatura ha pasado a estar dentro del umbral
                     self.safe = True
-                    notification = True
-                    print("The temperature is now safe, sending notification")
+                    # notification = True
+                    print(f"The temperature is now safe ({temperature}ºC)")
 
-                timer = 2
-                while notification:
-                    try:
-                        self.send_notification()
-                        break
-                    except:
-                        if timer <= SETTINGS["message"]["timeout"]:
-                            print(f"Couldn't send notification, retrying in {timer} seconds...")
-                            time.sleep(timer)
-                            timer += 2
-                        else:
-                            print("Connection lost")
-                            break
+                # timer = 2
+                # while notification:
+                #     try:
+                #         self.send_notification()
+                #         break
+                #     except:
+                #         if timer <= SETTINGS["message"]["timeout"]:
+                #             print(f"Couldn't send notification, retrying in {timer} seconds...")
+                #             time.sleep(timer)
+                #             timer += 2
+                #         else:
+                #             print("Connection lost")
+                #             break
+
+                try:
+                    self.send_notification()
+                except:
+                    print("Couldn't reach engine")
 
                 time.sleep(SETTINGS["weather"]["tick"])
         except Exception as e:
