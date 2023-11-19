@@ -49,12 +49,7 @@ class PersistDatabase:
         try:
             drones = {}
             for key in listeners:
-                listener = listeners[key]
-                drones[key] = {
-                    "position": listener.position,
-                    "alive": listener.alive,
-                    "active": listener.active,
-                    "positioned": listener.positioned}
+                drones[key] = listeners[key].to_dict()
 
             with open(self.path, "w") as data:
                 data.write(json.dumps({
@@ -62,8 +57,6 @@ class PersistDatabase:
                     "queue": queue,
                     "drones": drones,
                     "safe": safe}))
-
-            return True
         except Exception as e:
             print(str(e))
             quit()
@@ -76,15 +69,10 @@ class PersistDatabase:
 
                 data["listeners"] = {}
                 for key in data["drones"]:
-                    drone = data["drones"][key]
-
                     listener = Listener()
-                    listener.position = drone["position"]
-                    listener.alive = drone["alive"]
-                    listener.active = drone["active"]
-                    listener.positioned = drone["positioned"]
-
+                    listener.from_dict(data["drones"][key])
                     data["listeners"][int(key)] = listener
+                del data["drones"]
 
                 return data
         except Exception as e:
@@ -93,15 +81,25 @@ class PersistDatabase:
             return None
 
 class Figure:
-    def __init__(self, name):
+    def __init__(self, name = ""):
         self.name   = name
         self.drones = {}
 
     def add_drone(self, identifier, position):
         if self.drones.get(identifier) is not None:
             return False
-        self.drones[identifier] = position
+        self.drones[int(identifier)] = position
         return True
+
+    def to_dict(self):
+        return {"name": self.name, "drones": self.drones}
+
+    def from_dict(self, figure):
+        self.name = figure["name"]
+        for key in figure["drones"]:
+            self.add_drone(int(key), figure["drones"][key])
+
+        return self
 
 class Listener:
     def __init__(self):
@@ -121,6 +119,19 @@ class Listener:
 
     def finalized(self):
         return self.positioned or not self.alive or not self.active
+
+    def to_dict(self):
+        return {
+            "position": self.position,
+            "alive": self.alive,
+            "active": self.active,
+            "positioned": self.positioned}
+
+    def from_dict(self, listener):
+        self.position = listener["position"]
+        self.alive = listener["alive"]
+        self.active = listener["active"]
+        self.positioned = listener["positioned"]
 
 class Engine:
     def __init__(self, database_registry, database_persist, reload_backup = False):
@@ -147,8 +158,8 @@ class Engine:
         if reload_backup:
             data = self.database_persist.load_data()
 
-            self.figure     = data["figure"]
-            self.queue      = data["queue"]
+            self.figure     = Figure().from_dict(data["figure"]) if data["figure"] is not None else None
+            self.queue      = list(map(lambda x: Figure().from_dict(x), data["queue"]))
             self.listeners  = data["listeners"]
             self.safe       = data["safe"]
 
@@ -257,13 +268,19 @@ class Engine:
                 if finished:
                     self.figure = None
 
+            # Imprimir el estado del clima
+            weather = "SAFE"
+            if not self.safe:
+                weather = "DANGEROUS"
+            print(f"Weather status: {weather}")
+
             # Imprimir la lista de drones
             for key in self.listeners:
                 listener = self.listeners[key]
 
-                status = "Alive"
+                status = "ALIVE"
                 if not listener.alive:
-                    status = "Dead"
+                    status = "DEAD"
 
                 key = fill_left(str(key), 2)
                 p_x = fill_left(str(listener.position["x"]), 2)
@@ -272,7 +289,11 @@ class Engine:
                 print(f"<{key}> ({p_x}, {p_y}) {status}")
 
             # Hacer una copia de seguridad
-            self.database_persist.save_data(self.figure, self.queue, self.listeners, self.safe)
+            self.database_persist.save_data(
+                self.figure.to_dict() if self.figure != None else None,
+                list(map(lambda x: x.to_dict(), self.queue)),
+                self.listeners,
+                self.safe)
 
             time.sleep(SETTINGS["engine"]["tick"])
 
