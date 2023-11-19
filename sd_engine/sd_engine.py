@@ -1,5 +1,3 @@
-# TODO: Base de datos de persistencia
-
 import json
 import socket
 import sys
@@ -29,6 +27,9 @@ def get_figures(path):
     except Exception as e:
         return None
 
+def fill_left(string, length):
+    return "0" * (len(string) - length) + string
+
 class RegistryDatabase:
     def __init__(self, path):
         self.path = path
@@ -38,23 +39,67 @@ class RegistryDatabase:
             with sqlite3.connect(self.path) as con:
                 return not con.cursor().execute(f"SELECT * FROM Registry WHERE identifier = {identifier} AND token = '{token}';").fetchone() is None
         except Exception as e:
-            print(str(e))
             return False
 
 class PersistDatabase:
     def __init__(self, path):
         self.path = path
 
+    def save_data(self, figure, queue, listeners, safe):
+        try:
+            drones = {}
+            for key in listeners:
+                drones[key] = listeners[key].to_dict()
+
+            with open(self.path, "w") as data:
+                data.write(json.dumps({
+                    "figure": figure,
+                    "queue": queue,
+                    "drones": drones,
+                    "safe": safe}))
+        except Exception as e:
+            print(str(e))
+            quit()
+            raise e
+
+    def load_data(self):
+        try:
+            with open(self.path, "r") as backup:
+                data = json.loads(backup.read())
+
+                data["listeners"] = {}
+                for key in data["drones"]:
+                    listener = Listener()
+                    listener.from_dict(data["drones"][key])
+                    data["listeners"][int(key)] = listener
+                del data["drones"]
+
+                return data
+        except Exception as e:
+            print(str(e))
+            quit()
+            return None
+
 class Figure:
-    def __init__(self, name):
+    def __init__(self, name = ""):
         self.name   = name
         self.drones = {}
 
     def add_drone(self, identifier, position):
         if self.drones.get(identifier) is not None:
             return False
-        self.drones[identifier] = position
+        self.drones[int(identifier)] = position
         return True
+
+    def to_dict(self):
+        return {"name": self.name, "drones": self.drones}
+
+    def from_dict(self, figure):
+        self.name = figure["name"]
+        for key in figure["drones"]:
+            self.add_drone(int(key), figure["drones"][key])
+
+        return self
 
 class Listener:
     def __init__(self):
@@ -75,8 +120,21 @@ class Listener:
     def finalized(self):
         return self.positioned or not self.alive or not self.active
 
+    def to_dict(self):
+        return {
+            "position": self.position,
+            "alive": self.alive,
+            "active": self.active,
+            "positioned": self.positioned}
+
+    def from_dict(self, listener):
+        self.position = listener["position"]
+        self.alive = listener["alive"]
+        self.active = listener["active"]
+        self.positioned = listener["positioned"]
+
 class Engine:
-    def __init__(self, database_registry, database_persist):
+    def __init__(self, database_registry, database_persist, reload_backup = False):
         self.figure     = None
         self.queue      = []
         self.listeners  = {}
@@ -95,6 +153,15 @@ class Engine:
         self.set_partitions("drone_position", SETTINGS["broker"]["partitions"])
         self.set_partitions("drone_target", SETTINGS["broker"]["partitions"])
         self.set_partitions("drone_list", 1)
+
+        # Recargar información previa
+        if reload_backup:
+            data = self.database_persist.load_data()
+
+            self.figure     = Figure().from_dict(data["figure"]) if data["figure"] is not None else None
+            self.queue      = list(map(lambda x: Figure().from_dict(x), data["queue"]))
+            self.listeners  = data["listeners"]
+            self.safe       = data["safe"]
 
         threading.Thread(target = self.start_authentication_service, args = ()).start()
         threading.Thread(target = self.start_weather_service, args = ()).start()
@@ -130,17 +197,24 @@ class Engine:
             try:
                 with threading.Lock():
                     data = json.loads(drone_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
+
                     status = False
+                    position = {"x": 0, "y": 0}
 
                     if self.database_registry.validate_drone(data["identifier"], data["token"]):
                         if self.add_listener(data["identifier"], Listener()):
+                            # El dron no se había conectado previamente
                             status = True
                             # Figura en progreso, comprobar si se debe activar el dron
                             if self.figure is not None:
                                 if self.figure.drones.get(data["identifier"]) is not None:
                                     self.listeners[data["identifier"]].active = True
+                        else:
+                            # El dron ya existía y se está reconectando
+                            status = True
+                            position = self.listeners[data["identifier"]].position
 
-                    drone_socket.send(json.dumps({"accepted": status}).encode(SETTINGS["message"]["codification"]))
+                    drone_socket.send(json.dumps({"accepted": status, "position": position}).encode(SETTINGS["message"]["codification"]))
             except Exception as e:
                 print(f"The request couldn't be handled properly ({str(e)})")
             finally:
@@ -157,8 +231,11 @@ class Engine:
 
         self.service_spectacle = True
         while self.service_spectacle:
+            print("\033c", end = "")
+
             # Leer el archivo de figuras
             if self.figure is None and len(self.queue) == 0:
+                print("Awaiting for 'figures.json' file")
                 figures = get_figures(SETTINGS["engine"]["figures"])
                 if figures is not None:
                     self.queue = figures
@@ -178,8 +255,8 @@ class Engine:
                 self.publish_drone_list(producer)
                 self.publish_drone_target(producer)
 
-                # Imprimir mapa
-                print(f"Currently printing figure <{self.figure.name}>")
+                # Imprimir mapa e información
+                print(f"Printing figure <{self.figure.name}>")
                 print(str(self))
 
                 # Comprobar si la figura ha acabado
@@ -190,6 +267,33 @@ class Engine:
                         break
                 if finished:
                     self.figure = None
+
+            # Imprimir el estado del clima
+            weather = "SAFE"
+            if not self.safe:
+                weather = "DANGEROUS"
+            print(f"Weather status: {weather}")
+
+            # Imprimir la lista de drones
+            for key in self.listeners:
+                listener = self.listeners[key]
+
+                status = "ALIVE"
+                if not listener.alive:
+                    status = "DEAD"
+
+                key = fill_left(str(key), 2)
+                p_x = fill_left(str(listener.position["x"]), 2)
+                p_y = fill_left(str(listener.position["y"]), 2)
+
+                print(f"<{key}> ({p_x}, {p_y}) {status}")
+
+            # Hacer una copia de seguridad
+            self.database_persist.save_data(
+                self.figure.to_dict() if self.figure != None else None,
+                list(map(lambda x: x.to_dict(), self.queue)),
+                self.listeners,
+                self.safe)
 
             time.sleep(SETTINGS["engine"]["tick"])
 
@@ -318,6 +422,10 @@ class Engine:
         return result
 
 if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <reload>")
+        quit()
+
     try:
         with open("settings/settings.json", "r") as settings_file:
             SETTINGS = json.loads(settings_file.read())
@@ -325,5 +433,8 @@ if __name__ == "__main__":
         print("Could not load settings file 'settings.json', shutting down")
         quit()
 
-    ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]))
-    print("Engine server has been successfully created")
+    if int(sys.argv[1]) == 1:
+        print("Reloading persist...")
+        ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]), True)
+    else:
+        ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]), False)

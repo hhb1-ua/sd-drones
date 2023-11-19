@@ -39,7 +39,7 @@
         "backlog": 10,
         "tick": 2,
         "registry": "registry/registry.db",
-        "persist": "engine/persist.db",
+        "persist": "engine/persist.json",
         "figures": "engine/figures.json"
     },
     "broker": {

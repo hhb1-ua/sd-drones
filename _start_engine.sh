@@ -1,7 +1,17 @@
 #!/bin/bash
+reload=0
+
+while getopts r arg
+do
+    case $arg in
+        r) reload=1;;
+    esac
+done
+
 docker build\
     &> /dev/null\
     -t sd_engine\
+    --build-arg RELOAD=$reload\
     ./sd_engine
 konsole\
     &> /dev/null\
