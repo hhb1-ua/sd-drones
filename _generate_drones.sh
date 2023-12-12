@@ -1,14 +1,12 @@
 #!/bin/bash
 start=1
 number=1
-network="sd-drones_engine-network"
 
 while getopts s:n:l: flag
 do
     case $flag in
         s) start=$OPTARG;;
         n) number=$OPTARG;;
-        l) network=$OPTARG;;
     esac
 done
 
