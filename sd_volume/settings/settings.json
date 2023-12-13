@@ -1,5 +1,6 @@
 {
-    "adress": {
+    "debug": true,
+    "address": {
         "registry": {
             "host": "registry",
             "port": 9010
@@ -33,7 +34,11 @@
     },
     "registry": {
         "backlog": 10,
-        "database": "registry/registry.db"
+        "database": "registry/registry.db",
+        "secure": true,
+        "certificate": "certificate/domain.crt",
+        "key": "certificate/domain.key",
+        "expiration": 20
     },
     "engine": {
         "backlog": 10,
