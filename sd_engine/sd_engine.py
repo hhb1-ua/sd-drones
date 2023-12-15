@@ -7,6 +7,9 @@ import datetime
 import threading
 import time
 import sqlite3
+import hashlib
+import flask
+import requests
 
 SETTINGS    = None
 ENGINE      = None
@@ -34,11 +37,25 @@ class RegistryDatabase:
     def __init__(self, path):
         self.path = path
 
-    def validate_drone(self, identifier, token):
+    def validate_drone(self, identifier, password):
+        password = hashlib.sha256(bytes(password, SETTINGS["message"]["codification"])).hexdigest()
         try:
             with sqlite3.connect(self.path) as con:
-                return not con.cursor().execute(f"SELECT * FROM Registry WHERE identifier = {identifier} AND token = '{token}';").fetchone() is None
+                return con.cursor().execute(f"SELECT * FROM Drone WHERE identifier = {identifier} AND password = '{password}';").fetchone() is not None
         except Exception as e:
+            print(str(e))
+            return False
+
+    def validate_token(self, token):
+        try:
+            with sqlite3.connect(self.path) as con:
+                query = con.cursor().execute(f"SELECT * FROM Token WHERE token = '{token}';").fetchone()
+                if query is not None:
+                    if datetime.datetime.now() < datetime.datetime.strptime(query[1], "%Y-%m-%d %H:%M:%S.%f"):
+                        return True
+                return False
+        except Exception as e:
+            print(str(e))
             return False
 
 class PersistDatabase:
@@ -145,8 +162,6 @@ class Engine:
 
         # Servicio de clima
         self.safe   = True
-        self.alive  = True
-        self.stamp  = datetime.datetime.now()
 
         # Servicios activos
         self.service_authentication = False
@@ -154,9 +169,9 @@ class Engine:
         self.service_spectacle      = False
         self.service_removal        = False
 
-        self.set_partitions("drone_position", SETTINGS["broker"]["partitions"])
-        self.set_partitions("drone_target", SETTINGS["broker"]["partitions"])
-        self.set_partitions("drone_list", 1)
+        # self.set_partitions("drone_position", SETTINGS["broker"]["partitions"])
+        # self.set_partitions("drone_target", SETTINGS["broker"]["partitions"])
+        # self.set_partitions("drone_list", 1)
 
         # Recargar información previa
         if reload_backup:
@@ -167,41 +182,25 @@ class Engine:
             self.listeners  = data["listeners"]
             self.safe       = data["safe"]
 
-        threading.Thread(target = self.start_authentication_service, args = ()).start()
         threading.Thread(target = self.start_weather_service, args = ()).start()
-        threading.Thread(target = self.start_removal_service, args = ()).start()
-        threading.Thread(target = self.start_spectacle_service, args = ()).start()
-        threading.Thread(target = self.track_weather_timeout, args = ()).start()
+        # threading.Thread(target = self.start_removal_service, args = ()).start()
+        # threading.Thread(target = self.start_spectacle_service, args = ()).start()
 
     def start_weather_service(self):
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.bind((SETTINGS["adress"]["weather"]["host"], SETTINGS["adress"]["weather"]["port"]))
-        server_socket.listen(SETTINGS["engine"]["backlog"])
-
         self.service_weather = True
+
         while self.service_weather:
-            weather_socket, weather_adress = server_socket.accept()
-            print(f"Request received from weather server at {weather_adress[0]}:{weather_adress[1]}")
             try:
-                with threading.Lock() as lock:
-                    self.safe = json.loads(weather_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))["safe"]
-                    self.stamp = datetime.datetime.now()
+                with open(SETTINGS["engine"]["weather"], "r") as source:
+                    data = json.loads(source.read())
+                    response = requests.get(f"https://api.openweathermap.org/data/2.5/weather?q={data['city']}&appid={data['key']}")
+                    temperature = response.json()["main"]["temp"]
+                    self.safe = temperature >= SETTINGS["weather"]["threshold"]
+                    print(self.safe, f"{temperature}ºK")
+
+                time.sleep(SETTINGS["engine"]["tick"])
             except Exception as e:
-                print(f"The request couldn't be handled properly ({str(e)})")
-            finally:
-                weather_socket.close()
-
-    def track_weather_timeout(self):
-        while self.service_weather:
-            time_elapsed = (datetime.datetime.now() - self.stamp).total_seconds()
-
-            if self.alive and time_elapsed > SETTINGS["message"]["timeout"]:
-                self.alive = False
-                self.safe = False
-            elif not self.alive and time_elapsed <= SETTINGS["message"]["timeout"]:
-                self.alive = True
-
-            time.sleep(SETTINGS["engine"]["tick"])
+                raise e
 
     def start_authentication_service(self):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -28,7 +28,7 @@
         "rows": 20
     },
     "weather": {
-        "threshold": 0,
+        "threshold": 280,
         "tick": 2,
         "database": "weather/weather.json"
     },
@@ -45,7 +45,10 @@
         "tick": 2,
         "registry": "registry/registry.db",
         "persist": "engine/persist.json",
-        "figures": "engine/figures.json"
+        "certificate": "certificate/domain.crt",
+        "key": "certificate/domain.key",
+        "figures": "engine/figures.json",
+        "weather": "engine/weather.json"
     },
     "broker": {
         "partitions": 50
