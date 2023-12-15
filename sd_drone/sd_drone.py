@@ -1,10 +1,12 @@
 import json
-import socket
 import sys
 import os
 import threading
 import time
 import kafka
+import requests
+import warnings
+from urllib3.exceptions import InsecureRequestWarning
 
 SETTINGS    = None
 DRONE       = None
@@ -28,31 +30,25 @@ def call_repeatedly(function):
     return False
 
 class Drone:
-    def __init__(self, identifier, alias, token = None):
-        self.identifier = identifier    # Identificador interno
-        self.alias      = alias         # Nombre interno
-        self.token      = token         # Código de autentificación
+    def __init__(self, identifier, alias, password):
+        self.identifier = identifier    # Identificador
+        self.alias      = alias         # Nombre
+        self.password   = password      # Contraseña
 
         self.x = 0
         self.y = 0
 
-        if token is None:
-            if not call_repeatedly(self.identity_register):
-                raise Exception("Couldn't connect to registry server")
-
-        if not call_repeatedly(self.identity_authenticate):
-            raise Exception("Couldn't authenticate in engine server")
-
-        try:
-            threading.Thread(target = self.track_drone_list, args = ()).start()
-            threading.Thread(target = self.track_drone_target, args = ()).start()
-        except Exception as e:
-            raise e
+        # try:
+        #     threading.Thread(target = self.track_drone_list, args = ()).start()
+        #     threading.Thread(target = self.track_drone_target, args = ()).start()
+        # except Exception as e:
+        #     raise e
 
     def __str__(self):
         return json.dumps({
             "identifier": self.identifier,
             "alias": self.alias,
+            "password": self.password,
             "token": self.token,
             "position": {
                 "x": self.x,
@@ -60,79 +56,26 @@ class Drone:
             }
         })
 
-    def identity_register(self):
+    def register_drone(self):
+        api = f"https://{SETTINGS['address']['registry']['host']}:{SETTINGS['address']['registry']['port']}/register_drone"
         try:
-            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server.connect((SETTINGS["adress"]["registry"]["host"], SETTINGS["adress"]["registry"]["port"]))
-            message = json.dumps({
-                "operation": "register",
-                "identifier": self.identifier,
-                "alias": self.alias
-            })
-            server.send(message.encode(SETTINGS["message"]["codification"]))
-            response = json.loads(server.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
-            server.close()
-
-            if response["accepted"]:
-                self.token = response["token"]
-                return True
-            return False
-
+            return requests.post(api, json = {"identifier": self.identifier, "alias": self.alias, "password": self.password}, verify = False).status_code == 200
         except Exception as e:
             return False
 
-    def identity_modify(self):
+    def request_token(self):
+        api = f"https://{SETTINGS['address']['registry']['host']}:{SETTINGS['address']['registry']['port']}/request_token"
         try:
-            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server.connect((SETTINGS["adress"]["registry"]["host"], SETTINGS["adress"]["registry"]["port"]))
-            message = json.dumps({
-                "operation": "modify",
-                "identifier": self.identifier,
-                "alias": self.alias
-            })
-            server.send(message.encode(SETTINGS["message"]["codification"]))
-            response = json.loads(server.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
-            server.close()
-
-            return response["accepted"]
-
+            response = requests.post(api, json = {"identifier": self.identifier, "password": self.password}, verify = False)
+            if response.status_code == 200:
+                return response.json()["token"]
+            return None
         except Exception as e:
-            return False
+            return None
 
-    def identity_delete(self):
-        try:
-            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server.connect((SETTINGS["adress"]["registry"]["host"], SETTINGS["adress"]["registry"]["port"]))
-            message = json.dumps({
-                "operation": "delete",
-                "identifier": self.identifier
-            })
-            server.send(message.encode(SETTINGS["message"]["codification"]))
-            response = json.loads(server.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
-            server.close()
-
-            return response["accepted"]
-
-        except Exception as e:
-            return False
-
-    def identity_authenticate(self):
-        try:
-            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server.connect((SETTINGS["adress"]["authentication"]["host"], SETTINGS["adress"]["authentication"]["port"]))
-            server.send(json.dumps({"identifier": self.identifier,"token": self.token}).encode(SETTINGS["message"]["codification"]))
-            response = json.loads(server.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
-            server.close()
-
-            # Asignar nueva posición
-            if response["accepted"]:
-                self.x = response["position"]["x"]
-                self.y = response["position"]["y"]
-
-            return response["accepted"]
-
-        except Exception as e:
-            raise e
+    def authenticate_drone(self):
+        # TODO
+        return False
 
     def step_toward(self, target):
         if target["x"] < 0 or target["y"] < 0 or target["x"] >= SETTINGS["map"]["cols"] or target["y"] >= SETTINGS["map"]["rows"]:
@@ -154,7 +97,6 @@ class Drone:
             print(f"Drone <{self.identifier}> with alias <{self.alias}> is currently at ({self.x}, {self.y})")
             print(message.value["map"])
 
-
     def track_drone_target(self):
         consumer = kafka.KafkaConsumer(
             bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
@@ -171,27 +113,38 @@ class Drone:
             producer.send("drone_position", value = str(self), partition = self.identifier)
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3 and len(sys.argv) != 4:
-        print(f"Usage: {sys.argv[0]} <identifier> <alias> [token]")
+    if len(sys.argv) != 4:
+        print(f"Usage: {sys.argv[0]} <identifier> <alias> <password>")
         quit()
 
     try:
         with open("settings/settings.json", "r") as settings_file:
             SETTINGS = json.loads(settings_file.read())
     except Exception as e:
-        print("Could not load settings file 'settings.json', shutting down")
+        print("Couldn't load settings file 'settings.json', shutting down")
         quit()
 
+    # WARNING: Desactivadas alertas de SSL autofirmado
+    warnings.simplefilter("ignore", InsecureRequestWarning)
+
     try:
-        if len(sys.argv) == 3:
-            DRONE = Drone(int(sys.argv[1]), str(sys.argv[2]))
-        else:
-            if sys.argv[3] == "null":
-                DRONE = Drone(int(sys.argv[1]), sys.argv[2])
-            else:
-                DRONE = Drone(int(sys.argv[1]), str(sys.argv[2]), str(sys.argv[3]))
-        print(f"Successfully created drone <{DRONE.alias}> with identifier <{DRONE.identifier}>")
+        DRONE = Drone(int(sys.argv[1]), str(sys.argv[2]), str(sys.argv[3]))
+
+        if not DRONE.register_drone():
+            print("Couldn't register drone, shutting down")
+            quit()
+
+        token = DRONE.request_token()
+        if token is None:
+            print("Couldn't get authentication token, shutting down")
+            quit()
+
+        if not DRONE.authenticate_drone(token):
+            print("Couldn't authenticate in Engine, shutting down")
+            quit()
+
     except Exception as e:
+        raise e
         print(str(e))
         print("Service stopped abruptly, shutting down")
         quit()
