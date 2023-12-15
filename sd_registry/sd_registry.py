@@ -59,43 +59,36 @@ class Database:
 
 @REGISTRY.route("/register_drone", methods = ["GET", "POST"])
 def register_drone():
-    # TODO: Registro de auditoría
     try:
-        identifier = flask.request.args.get("identifier", None)
-        alias = flask.request.args.get("alias", None)
-        password = flask.request.args.get("password", None)
+        data = flask.request.get_json()
 
         if SETTINGS["debug"]:
-            print(f"Drone registry request with data ({identifier}, {alias}, {password})")
+            print(f"Drone registry request with data ({data['identifier']}, {data['alias']}, {data['password']})")
 
-        if identifier is None or alias is None or password is None:
-            return flask.jsonify({"success": False})
-        return flask.jsonify({"success": DATABASE.insert_drone(identifier, alias, password)})
+        if data["identifier"] is not None and data["alias"] is not None and data["password"] is not None:
+            if DATABASE.insert_drone(data["identifier"], data["alias"], data["password"]):
+                return flask.jsonify({}), 200
+        return flask.jsonify({}), 400
     except Exception as e:
-        return flask.jsonify({"success": False})
+        return flask.jsonify({}), 400
 
 @REGISTRY.route("/request_token", methods = ["GET", "POST"])
 def request_token():
-    # TODO: Registro de auditoría
     try:
-        identifier = flask.request.args.get("identifier", None)
-        password = flask.request.args.get("password", None)
+        data = flask.request.get_json()
 
         if SETTINGS["debug"]:
-            print(f"Token request with data ({identifier}, {password})")
+            print(f"Token request with data ({data['identifier']}, {data['password']})")
 
-        if not DATABASE.validate_drone(identifier, password):
-            return flask.jsonify({"success": False, "token": None})
-
-        token = str(uuid.uuid4())
-        expiration = datetime.datetime.now() + datetime.timedelta(0, SETTINGS["registry"]["expiration"])
-
-        if not DATABASE.insert_token(token, expiration):
-            return flask.jsonify({"success": False, "token": None})
-
-        return flask.jsonify({"success": True, "token": token})
+        if DATABASE.validate_drone(data["identifier"], data["password"]):
+            token = str(uuid.uuid4())
+            expiration = datetime.datetime.now() + datetime.timedelta(0, SETTINGS["registry"]["expiration"])
+            if DATABASE.insert_token(token, expiration):
+                return flask.jsonify({"token": token}), 200
+        return flask.jsonify({}), 400
     except Exception as e:
-        return flask.jsonify({"success": False, "token": None})
+        return flask.jsonify({}), 400
+
 
 if __name__ == "__main__":
     try:
