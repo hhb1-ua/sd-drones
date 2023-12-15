@@ -1,8 +1,7 @@
 #!/bin/bash
 identifier=$1
 alias=$2
-token=$3
-network="sd-drones_engine-network"
+password=$3
 
 # while getopts t: flag
 # do
@@ -18,7 +17,7 @@ docker\
     -t $alias\
     --build-arg IDENTIFIER=$identifier\
     --build-arg ALIAS=$alias\
-    --build-arg TOKEN=$token\
+    --build-arg PASSWORD=$password\
     ./sd_drone
 konsole\
     &> /dev/null\
@@ -27,7 +26,8 @@ konsole\
     docker run\
     --rm\
     --volume "$(pwd)/sd_volume/settings/":"/app/settings/"\
-    --network $network\
+    --volume "$(pwd)/sd_volume/certificate/":"/app/certificate/"\
+    --network sd-drones_engine-network\
     --network-alias $alias\
     --publish-all\
     $alias\
