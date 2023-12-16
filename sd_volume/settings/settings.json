@@ -5,11 +5,11 @@
             "host": "registry",
             "port": 9010
         },
-        "authentication": {
+        "authenticate": {
             "host": "engine",
             "port": 9020
         },
-        "weather": {
+        "monitor": {
             "host": "engine",
             "port": 9030
         },
@@ -29,19 +29,16 @@
     },
     "weather": {
         "threshold": 280,
-        "tick": 2,
-        "database": "weather/weather.json"
     },
     "registry": {
-        "backlog": 10,
-        "database": "registry/registry.db",
         "secure": true,
+        "database": "registry/registry.db",
         "certificate": "certificate/domain.crt",
         "key": "certificate/domain.key",
         "expiration": 20
     },
     "engine": {
-        "backlog": 10,
+        "secure": true,
         "tick": 2,
         "registry": "registry/registry.db",
         "persist": "engine/persist.json",

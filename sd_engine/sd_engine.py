@@ -10,9 +10,14 @@ import sqlite3
 import hashlib
 import flask
 import requests
+import cryptography
 
-SETTINGS    = None
-ENGINE      = None
+SETTINGS        = None
+ENGINE          = None
+REGISTRY        = None
+AUDIT           = None
+AUTHENTICATE    = flask.Flask(__name__)
+MONITOR         = flask.Flask(__name__)
 
 def get_figures(path):
     try:
@@ -67,17 +72,16 @@ class PersistDatabase:
             drones = {}
             for key in listeners:
                 drones[key] = listeners[key].to_dict()
-
             with open(self.path, "w") as data:
                 data.write(json.dumps({
                     "figure": figure,
                     "queue": queue,
                     "drones": drones,
                     "safe": safe}))
+            return True
         except Exception as e:
             print(str(e))
-            quit()
-            raise e
+            return False
 
     def load_data(self):
         try:
@@ -94,7 +98,6 @@ class PersistDatabase:
                 return data
         except Exception as e:
             print(str(e))
-            quit()
             return None
 
 class Figure:
@@ -119,12 +122,13 @@ class Figure:
         return self
 
 class Listener:
-    def __init__(self):
+    def __init__(self, crypto):
         # Información del dron
         self.position   = {"x": 0, "y": 0}
 
         # Información de escucha
         self.timestamp  = None
+        self.crypto     = crypto
         self.alive      = True
         self.active     = False
         self.positioned = False
@@ -185,22 +189,6 @@ class Engine:
         threading.Thread(target = self.start_weather_service, args = ()).start()
         # threading.Thread(target = self.start_removal_service, args = ()).start()
         # threading.Thread(target = self.start_spectacle_service, args = ()).start()
-
-    def start_weather_service(self):
-        self.service_weather = True
-
-        while self.service_weather:
-            try:
-                with open(SETTINGS["engine"]["weather"], "r") as source:
-                    data = json.loads(source.read())
-                    response = requests.get(f"https://api.openweathermap.org/data/2.5/weather?q={data['city']}&appid={data['key']}")
-                    temperature = response.json()["main"]["temp"]
-                    self.safe = temperature >= SETTINGS["weather"]["threshold"]
-                    print(self.safe, f"{temperature}ºK")
-
-                time.sleep(SETTINGS["engine"]["tick"])
-            except Exception as e:
-                raise e
 
     def start_authentication_service(self):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -440,6 +428,81 @@ class Engine:
 
         return result
 
+class AdvancedEngine:
+    def __init__(self):
+        self.figure     = None
+        self.queue      = []
+        self.listeners  = {}
+
+        # Persistencia de datos
+        self.persist    =
+
+        # Estado del clima
+        self.safe   = True
+
+        # Servicios activos
+        self.service_weather        = False
+        self.service_spectacle      = False
+        self.service_removal        = False
+
+        # Iniciar servicios
+        threading.Thread(target = self.start_weather_service, args = ()).start()
+
+    def start_weather_service():
+        self.service_weather = True
+        while self.service_weather:
+            try:
+                with open(SETTINGS["engine"]["weather"], "r") as source:
+                    data = json.loads(source.read())
+                    response = requests.get(f"https://api.openweathermap.org/data/2.5/weather?q={data['city']}&appid={data['key']}")
+                    temperature = response.json()["main"]["temp"]
+                    self.safe = temperature >= SETTINGS["weather"]["threshold"]
+                    if SETTINGS["debug"]:
+                        print(f"Read {temperature}ºK, weather safety set to {self.safe}")
+            except Exception as e:
+                if SETTINGS["debug"]:
+                    print("Error when connecting to OpenWeather")
+            finally:
+                time.sleep(SETTINGS["engine"]["tick"])
+
+    def add_listener(identifier):
+        listener_data = {
+            "crypto": None,
+            "position": {
+                "x": 0,
+                "y": 0
+            }
+        }
+
+        if self.listeners[identifier] is None:
+            listener_data["crypto"] = cryptography.fernet.Fernet.generate_key()
+            self.listeners[identifier] = Listener(listener["crypto"])
+
+            # Activar el dron
+            if self.figure is not None:
+                if self.figure.drones[identifier] is not None:
+                    self.listeners[identifier].active = True
+        else:
+            listener_data["crypto"] = self.listeners[identifier].crypto
+            listener_data["position"] = self.listeners[identifier].position
+
+        return listener_data
+
+@AUTHENTICATE.route("/authenticate", methods = ["GET", "POST"])
+def authenticate_drone()
+    try:
+        data = flask.request.get_json()
+
+        if SETTINGS["debug"]:
+            print(f"Drone registry request with data ({data['identifier']}, {data['password'], data['token']})")
+
+        if data["identifier"] is not None and data["password"] is not None and data["token"] is not None:
+            if REGISTRY.validate_drone(data["identifier"], data["password"]) and REGISTRY.validate_token(data["token"]):
+                return flask.jsonify(ENGINE.add_listener(data["identifier"])), 200
+        return flask.jsonify({}), 400
+    except Exception as e:
+        return flask.jsonify({}), 400
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <reload>")
@@ -452,8 +515,20 @@ if __name__ == "__main__":
         print("Could not load settings file 'settings.json', shutting down")
         quit()
 
+    REGISTRY = RegistryDatabase(SETTINGS["engine"]["registry"])
+
     if int(sys.argv[1]) == 1:
         print("Reloading persist...")
-        ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]), True)
+        ENGINE = AdvancedEngine(REGISTRY, PersistDatabase(SETTINGS["engine"]["persist"]), True)
     else:
-        ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]), False)
+        ENGINE = AdvancedEngine(REGISTRY, PersistDatabase(SETTINGS["engine"]["persist"]), False)
+
+    MONITOR.run(
+        host = SETTINGS["address"]["monitor"]["host"],
+        port = SETTINGS["address"]["monitor"]["port"],
+        ssl_context = (SETTINGS["engine"]["certificate"], SETTINGS["engine"]["key"]) if SETTINGS["engine"]["secure"] else None)
+
+    AUTHENTICATE.run(
+        host = SETTINGS["address"]["authenticate"]["host"],
+        port = SETTINGS["address"]["authenticate"]["port"],
+        ssl_context = (SETTINGS["engine"]["certificate"], SETTINGS["engine"]["key"]) if SETTINGS["engine"]["secure"] else None)
