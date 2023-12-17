@@ -6,6 +6,7 @@ import time
 import kafka
 import requests
 import warnings
+from cryptography.fernet import Fernet
 from urllib3.exceptions import InsecureRequestWarning
 
 SETTINGS    = None
@@ -50,7 +51,7 @@ class Drone:
             "identifier": self.identifier,
             "alias": self.alias,
             "password": self.password,
-            "token": self.token,
+            "crypto": self.crypto.decode(),
             "position": {
                 "x": self.x,
                 "y": self.y
@@ -74,18 +75,19 @@ class Drone:
         except Exception as e:
             return None
 
-    def authenticate_drone(self):
+    def authenticate_drone(self, token):
         api = f"https://{SETTINGS['address']['authenticate']['host']}:{SETTINGS['address']['authenticate']['port']}/authenticate_drone"
         try:
-            response = requests.post(api, json = {"identifier": self.identifier, "password": self.password}, verify = False)
+            response = requests.post(api, json = {"identifier": self.identifier, "password": self.password, "token": token}, verify = False)
             if response.status_code == 200:
                 data = response.json()
-                self.crypto = data["crypto"]
+                self.crypto = data["crypto"].encode()
                 self.x = data["position"]["x"]
                 self.y = data["position"]["y"]
                 return True
             return False
         except Exception as e:
+            raise e
             return False
 
     def step_toward(self, target):
@@ -118,12 +120,12 @@ class Drone:
     def track_drone_target(self):
         fernet = Fernet(self.crypto)
 
-        consumer = kafka.KafkaConsumer(
-            bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])]))
+        consumer_drone_target = kafka.KafkaConsumer(
+            bootstrap_servers = [str(SETTINGS["address"]["broker"]["host"]) + ":" + str(SETTINGS["address"]["broker"]["port"])])
         consumer.assign([kafka.TopicPartition("drone_target", self.identifier)])
 
         producer = kafka.KafkaProducer(
-            bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
+            bootstrap_servers = [str(SETTINGS["address"]["broker"]["host"]) + ":" + str(SETTINGS["address"]["broker"]["port"])],
             value_serializer = lambda msg: fernet.encrypt(msg).encode(SETTINGS["message"]["codification"]))
 
         for message in consumer:
@@ -168,6 +170,8 @@ if __name__ == "__main__":
         if not DRONE.authenticate_drone(token):
             print("Couldn't authenticate in Engine, shutting down")
             quit()
+
+        print(str(DRONE))
 
     except Exception as e:
         raise e

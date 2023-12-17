@@ -10,7 +10,7 @@ import sqlite3
 import hashlib
 import flask
 import requests
-import cryptography
+from cryptography.fernet import Fernet
 
 SETTINGS        = None
 REGISTRY        = None
@@ -197,9 +197,9 @@ class Engine:
         self.service_spectacle      = False
         self.service_removal        = False
 
-        # self.set_partitions("drone_position", SETTINGS["broker"]["partitions"])
-        # self.set_partitions("drone_target", SETTINGS["broker"]["partitions"])
-        # self.set_partitions("drone_list", 1)
+        self.set_partitions("drone_position", SETTINGS["broker"]["partitions"])
+        self.set_partitions("drone_target", SETTINGS["broker"]["partitions"])
+        self.set_partitions("drone_list", 1)
 
         # Recargar información previa
         if reload_backup:
@@ -347,13 +347,20 @@ class AdvancedEngine:
 
         # Productores y consumidores de Kafka
         self.producer = kafka.KafkaProducer(
-            bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+            bootstrap_servers = [str(SETTINGS["address"]["broker"]["host"]) + ":" + str(SETTINGS["address"]["broker"]["port"])])
         self.consumer = kafka.KafkaConsumer(
             "drone_position",
-            bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+            bootstrap_servers = [SETTINGS["address"]["broker"]["host"] + ":" + str(SETTINGS["address"]["broker"]["port"])])
 
-        # Iniciar servicios
-        # threading.Thread(target = self.start_weather_service, args = ()).start()
+    def run_services(self):
+        if not self.service_weather:
+            threading.Thread(target = self.start_weather_service, args = ()).start()
+
+        if not self.service_removal:
+            threading.Thread(target = self.start_removal_service, args = ()).start()
+
+        if not self.service_spectacle:
+            threading.Thread(target = self.start_spectacle_service, args = ()).start()
 
     def start_weather_service():
         self.service_weather = True
@@ -391,6 +398,80 @@ class AdvancedEngine:
 
             time.sleep(SETTINGS["engine"]["tick"])
 
+    def start_spectacle_service(self):
+        threading.Thread(target = self.track_drone_position, args = ()).start()
+
+        self.service_spectacle = True
+        while self.service_spectacle:
+            # Limpiar pantalla
+            print("\033c", end = "")
+
+            # Leer el archivo de figuras
+            if self.figure is None and len(self.queue) == 0:
+                print("Awaiting for 'figures.json' file")
+                figures = get_figures(SETTINGS["engine"]["figures"])
+                if figures is not None:
+                    self.queue = figures
+                self.publish_drone_target(producer)
+
+            # Ejecutar las figuras
+            else:
+                # Avanzar en la cola
+                if self.figure is None:
+                    self.figure = self.queue.pop(0)
+
+                    for key in self.listeners:
+                        if self.figure.drones.get(key) is not None:
+                            self.listeners[key].active = True
+                        else:
+                            self.listeners[key].active = False
+
+                self.publish_drone_list()
+                self.publish_drone_target()
+
+                # Imprimir mapa e información
+                print(f"Printing figure <{self.figure.name}>")
+                print(str(self))
+
+                # Comprobar si la figura ha acabado
+                finished = True
+                for key in self.listeners:
+                    if not self.listeners[key].finalized():
+                        finished = False
+                        break
+                if finished:
+                    self.figure = None
+
+            # Imprimir el estado del clima
+            weather = "SAFE"
+            if not self.safe:
+                weather = "DANGEROUS"
+            print(f"Weather status: {weather}")
+
+            # Imprimir la lista de drones
+            for key in self.listeners:
+                listener = self.listeners[key]
+
+                status = "ALIVE"
+                if not listener.alive:
+                    status = "DEAD"
+                if not listener.usable:
+                    status = "CORRUPTED"
+
+                key = str(key)
+                p_x = str(listener.position["x"])
+                p_y = str(listener.position["y"])
+                print(f"<{key}> ({p_x}, {p_y}) {status}")
+
+            # Hacer una copia de seguridad
+            self.persist.save_data(
+                self.figure.to_dict() if self.figure != None else None,
+                list(map(lambda x: x.to_dict(), self.queue)),
+                self.listeners,
+                self.safe)
+
+            time.sleep(SETTINGS["engine"]["tick"])
+
     def add_listener(self, identifier):
         data = {
             "crypto": None,
@@ -400,16 +481,17 @@ class AdvancedEngine:
             }
         }
 
-        if self.listeners[identifier] is None:
-            data["crypto"] = cryptography.fernet.Fernet.generate_key()
-            self.listeners[identifier] = Listener(listener["crypto"])
+        if self.listeners.get(identifier) is None:
+            crypto = Fernet.generate_key()
+            self.listeners[identifier] = Listener(crypto)
+            data["crypto"] = crypto.decode()
 
             # Activar el dron
             if self.figure is not None:
-                if self.figure.drones[identifier] is not None:
+                if self.figure.drones.get(identifier) is not None:
                     self.listeners[identifier].active = True
         else:
-            data["crypto"] = self.listeners[identifier].crypto
+            data["crypto"] = self.listeners[identifier].crypto.decode()
             data["position"] = self.listeners[identifier].position
 
         return data
@@ -467,7 +549,7 @@ class AdvancedEngine:
 
     def set_partitions(self, topic, number):
         admin = kafka.KafkaAdminClient(
-            bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+            bootstrap_servers = [SETTINGS["address"]["broker"]["host"] + ":" + str(SETTINGS["address"]["broker"]["port"])])
         current_partitions = self.get_partitions(topic)
 
         if current_partitions is None:
@@ -531,13 +613,20 @@ def authenticate_drone():
         data = flask.request.get_json()
 
         if SETTINGS["debug"]:
-            print(f"Drone registry request with data ({data['identifier']}, {data['password'], data['token']})")
+            print(f"Drone authentication request with data ({data['identifier']}, {data['password']}, {data['token']})")
 
         if data["identifier"] is not None and data["password"] is not None and data["token"] is not None:
             if REGISTRY.validate_drone(data["identifier"], data["password"]) and REGISTRY.validate_token(data["token"]):
-                return flask.jsonify(ENGINE.add_listener(data["identifier"])), 200
+                data = ENGINE.add_listener(data["identifier"])
+                print(data)
+                return flask.jsonify(data), 200
+            else:
+                print("Validation error")
+        else:
+            print("Data error")
         return flask.jsonify({}), 400
     except Exception as e:
+        raise e
         return flask.jsonify({}), 400
 
 if __name__ == "__main__":
@@ -561,6 +650,11 @@ if __name__ == "__main__":
         ENGINE = AdvancedEngine(PERSIST, AUDITORY)
     else:
         ENGINE = AdvancedEngine(PERSIST, AUDITORY)
+
+    ENGINE.set_partitions("drone_position", SETTINGS["broker"]["partitions"])
+    ENGINE.set_partitions("drone_target", SETTINGS["broker"]["partitions"])
+    ENGINE.set_partitions("drone_list", SETTINGS["broker"]["partitions"])
+    # ENGINE.run_services()
 
     AUTHENTICATE.run(
         host = SETTINGS["address"]["authenticate"]["host"],
