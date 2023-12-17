@@ -34,6 +34,7 @@ class Drone:
         self.identifier = identifier    # Identificador
         self.alias      = alias         # Nombre
         self.password   = password      # Contraseña
+        self.crypto     = None          # Clave de cifrado
 
         self.x = 0
         self.y = 0
@@ -74,8 +75,18 @@ class Drone:
             return None
 
     def authenticate_drone(self):
-        # TODO
-        return False
+        api = f"https://{SETTINGS['address']['authenticate']['host']}:{SETTINGS['address']['authenticate']['port']}/authenticate_drone"
+        try:
+            response = requests.post(api, json = {"identifier": self.identifier, "password": self.password}, verify = False)
+            if response.status_code == 200:
+                data = response.json()
+                self.crypto = data["crypto"]
+                self.x = data["position"]["x"]
+                self.y = data["position"]["y"]
+                return True
+            return False
+        except Exception as e:
+            return False
 
     def step_toward(self, target):
         if target["x"] < 0 or target["y"] < 0 or target["x"] >= SETTINGS["map"]["cols"] or target["y"] >= SETTINGS["map"]["rows"]:
@@ -86,31 +97,46 @@ class Drone:
         return True
 
     def track_drone_list(self):
+        fernet = Fernet(self.crypto)
+
         consumer = kafka.KafkaConsumer(
-            bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
-            value_deserializer = lambda msg: json.loads(msg.decode(SETTINGS["message"]["codification"])),
-            consumer_timeout_ms = SETTINGS["message"]["timeout"] * 1000)
-        consumer.assign([kafka.TopicPartition("drone_list", 0)])
+            bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+        consumer.assign([kafka.TopicPartition("drone_list", self.identifier)])
 
         for message in consumer:
-            print("\033c", end = "")
-            print(f"Drone <{self.identifier}> with alias <{self.alias}> is currently at ({self.x}, {self.y})")
-            print(message.value["map"])
+            try:
+                data = json.loads(fernet.decrypt(message).decode(SETTINGS["message"]["codification"]))
+
+                print("\033c", end = "")
+                print(f"Drone <{self.identifier}> with alias <{self.alias}> is currently at ({self.x}, {self.y})")
+                print(data["map"])
+            except Exception as e:
+                # Error al desencriptar el mensaje
+                print(f"Couldn't decrypt message, incorrect token ({str(e)})")
+                break
 
     def track_drone_target(self):
+        fernet = Fernet(self.crypto)
+
         consumer = kafka.KafkaConsumer(
-            bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
-            value_deserializer = lambda msg: json.loads(msg.decode(SETTINGS["message"]["codification"])))
+            bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])]))
         consumer.assign([kafka.TopicPartition("drone_target", self.identifier)])
 
         producer = kafka.KafkaProducer(
             bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])],
-            value_serializer = lambda msg: msg.encode(SETTINGS["message"]["codification"]))
+            value_serializer = lambda msg: fernet.encrypt(msg).encode(SETTINGS["message"]["codification"]))
 
         for message in consumer:
-            if not self.step_toward(message.value):
-                print("Couldn't step towards target, out of bounds")
-            producer.send("drone_position", value = str(self), partition = self.identifier)
+            try:
+                data = json.loads(fernet.decrypt(message).decode(SETTINGS["message"]["codification"]))
+
+                if not self.step_toward(data):
+                    print("Couldn't step towards target, out of bounds")
+                producer.send("drone_position", value = str(self), partition = self.identifier)
+            except Exception as e:
+                # Error al desencriptar el mensaje
+                print(f"Couldn't decrypt message, incorrect token ({str(e)})")
+                break
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:

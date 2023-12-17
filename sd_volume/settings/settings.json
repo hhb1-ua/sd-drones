@@ -28,7 +28,7 @@
         "rows": 20
     },
     "weather": {
-        "threshold": 280,
+        "threshold": 280
     },
     "registry": {
         "secure": true,
@@ -45,7 +45,8 @@
         "certificate": "certificate/domain.crt",
         "key": "certificate/domain.key",
         "figures": "engine/figures.json",
-        "weather": "engine/weather.json"
+        "weather": "engine/weather.json",
+        "auditory": "engine/auditory.db"
     },
     "broker": {
         "partitions": 50

@@ -13,11 +13,11 @@ import requests
 import cryptography
 
 SETTINGS        = None
-ENGINE          = None
 REGISTRY        = None
-AUDIT           = None
+AUDITORY        = None
+PERSIST         = None
+ENGINE          = None
 AUTHENTICATE    = flask.Flask(__name__)
-MONITOR         = flask.Flask(__name__)
 
 def get_figures(path):
     try:
@@ -34,9 +34,6 @@ def get_figures(path):
             return figure_list
     except Exception as e:
         return None
-
-def fill_left(string, length):
-    return "0" * (len(string) - length) + string
 
 class RegistryDatabase:
     def __init__(self, path):
@@ -100,6 +97,32 @@ class PersistDatabase:
             print(str(e))
             return None
 
+class AuditoryDatabase:
+    def __init__(self, path):
+        self.path = path
+
+    def get_total_rows(self):
+        try:
+            with sqlite3.connect(self.path) as con:
+                return con.cursor().execute("SELECT count(*) FROM Auditory;").fetchone()[0]
+        except Exception as e:
+            return None
+
+    def commit_log(self, timestamp, action, description):
+        try:
+            identifier = self.get_total_rows()
+            if identifier is None:
+                return False
+
+            with sqlite3.connect(self.path) as con:
+                cur = con.cursor()
+                cur.execute(f"INSERT INTO Auditory (identifier, stamp, action, description) VALUES ({identifier}, '{stamp}', '{action}', '{description}');")
+                con.commit()
+                return cur.rowcount > 0
+        except Exception as e:
+            print(str(e))
+            return False
+
 class Figure:
     def __init__(self, name = ""):
         self.name   = name
@@ -132,6 +155,7 @@ class Listener:
         self.alive      = True
         self.active     = False
         self.positioned = False
+        self.usable     = True
 
         self.stamp()
 
@@ -189,41 +213,6 @@ class Engine:
         threading.Thread(target = self.start_weather_service, args = ()).start()
         # threading.Thread(target = self.start_removal_service, args = ()).start()
         # threading.Thread(target = self.start_spectacle_service, args = ()).start()
-
-    def start_authentication_service(self):
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.bind((SETTINGS["adress"]["authentication"]["host"], SETTINGS["adress"]["authentication"]["port"]))
-        server_socket.listen(SETTINGS["engine"]["backlog"])
-
-        self.service_authentication = True
-        while self.service_authentication:
-            drone_socket, drone_adress = server_socket.accept()
-            print(f"Request received from drone at {drone_adress[0]}:{drone_adress[1]}")
-            try:
-                with threading.Lock():
-                    data = json.loads(drone_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
-
-                    status = False
-                    position = {"x": 0, "y": 0}
-
-                    if self.database_registry.validate_drone(data["identifier"], data["token"]):
-                        if self.add_listener(data["identifier"], Listener()):
-                            # El dron no se había conectado previamente
-                            status = True
-                            # Figura en progreso, comprobar si se debe activar el dron
-                            if self.figure is not None:
-                                if self.figure.drones.get(data["identifier"]) is not None:
-                                    self.listeners[data["identifier"]].active = True
-                        else:
-                            # El dron ya existía y se está reconectando
-                            status = True
-                            position = self.listeners[data["identifier"]].position
-
-                    drone_socket.send(json.dumps({"accepted": status, "position": position}).encode(SETTINGS["message"]["codification"]))
-            except Exception as e:
-                print(f"The request couldn't be handled properly ({str(e)})")
-            finally:
-                drone_socket.close()
 
     def start_spectacle_service(self):
         BROKER_ADRESS = SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])
@@ -336,6 +325,53 @@ class Engine:
                 else:
                     self.listeners[listener_key].positioned = False
 
+    def add_listener(self, key, listener):
+        if self.listeners.get(key) is not None:
+            return False
+        self.listeners[key] = listener
+        return True
+
+class AdvancedEngine:
+    def __init__(self, persist, auditory):
+        self.figure = None
+        self.queue = []
+        self.listeners = {}
+        self.persist = persist
+        self.auditory = auditory
+        self.safe = True
+
+        # Servicios activos
+        self.service_weather = False
+        self.service_spectacle = False
+        self.service_removal = False
+
+        # Productores y consumidores de Kafka
+        self.producer = kafka.KafkaProducer(
+            bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+        self.consumer = kafka.KafkaConsumer(
+            "drone_position",
+            bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+
+        # Iniciar servicios
+        # threading.Thread(target = self.start_weather_service, args = ()).start()
+
+    def start_weather_service():
+        self.service_weather = True
+        while self.service_weather:
+            try:
+                with open(SETTINGS["engine"]["weather"], "r") as source:
+                    data = json.loads(source.read())
+                    response = requests.get(f"https://api.openweathermap.org/data/2.5/weather?q={data['city']}&appid={data['key']}")
+                    temperature = response.json()["main"]["temp"]
+                    self.safe = temperature >= SETTINGS["weather"]["threshold"]
+                    if SETTINGS["debug"]:
+                        print(f"Read {temperature}ºK, weather safety set to {self.safe}")
+            except Exception as e:
+                if SETTINGS["debug"]:
+                    print("Error when connecting to OpenWeather")
+            finally:
+                time.sleep(SETTINGS["engine"]["tick"])
+
     def start_removal_service(self):
         self.service_removal = True
         while self.service_removal:
@@ -355,17 +391,77 @@ class Engine:
 
             time.sleep(SETTINGS["engine"]["tick"])
 
-    def add_listener(self, key, listener):
-        if self.listeners.get(key) is not None:
-            return False
-        self.listeners[key] = listener
-        return True
+    def add_listener(self, identifier):
+        data = {
+            "crypto": None,
+            "position": {
+                "x": 0,
+                "y": 0
+            }
+        }
+
+        if self.listeners[identifier] is None:
+            data["crypto"] = cryptography.fernet.Fernet.generate_key()
+            self.listeners[identifier] = Listener(listener["crypto"])
+
+            # Activar el dron
+            if self.figure is not None:
+                if self.figure.drones[identifier] is not None:
+                    self.listeners[identifier].active = True
+        else:
+            data["crypto"] = self.listeners[identifier].crypto
+            data["position"] = self.listeners[identifier].position
+
+        return data
+
+    def publish_drone_target(self):
+        for key in self.listeners:
+            fernet = Fernet(self.listeners[key].crypto)
+            target = {"x": 0, "y": 0}
+
+            if self.figure is not None and self.safe:
+                if self.listeners[key].active:
+                    if self.figure.drones[key] is not None:
+                        target = self.figure.drones[key]
+
+            self.producer.send(
+                "drone_target",
+                value = fernet.encrypt(json.dumps(target).encode(SETTINGS["message"]["codification"])),
+                partition = key)
+
+    def publish_drone_list(self):
+        for key in self.listeners:
+            fernet = Fernet(self.listeners[key].crypto)
+            self.producer.send(
+                "drone_list",
+                value = fernet.encrypt(json.dumps({"map": str(self)}).encode(SETTINGS["message"]["codification"])),
+                partition = key)
+
+    def track_drone_position(self):
+        for message in self.consumer:
+            key = message.partition
+
+            if self.listeners[key] is not None:
+                fernet = Fernet(self.listeners[key].crypto)
+
+                try:
+                    data = json.loads(fernet.decrypt(message).decode(SETTINGS["message"]["codification"]))
+
+                    self.listeners[key].stamp()
+                    self.listeners[key].position = data["position"]
+
+                    if self.figure is not None and self.listeners[key].active:
+                        self.listeners[key].positioned = data["position"] == self.figure.drones[key]
+                    else:
+                        self.listeners[key].positioned = False
+                except Exception as e:
+                    # Los datos no se pueden desencriptar
+                    self.listeners[key].active = False
+                    self.listeners[key].usable = False
 
     def get_partitions(self, topic):
         try:
-            consumer = kafka.KafkaConsumer(
-                bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
-            return len(consumer.partitions_for_topic(topic))
+            return len(self.consumer.partitions_for_topic(topic))
         except:
             return None
 
@@ -428,68 +524,9 @@ class Engine:
 
         return result
 
-class AdvancedEngine:
-    def __init__(self):
-        self.figure     = None
-        self.queue      = []
-        self.listeners  = {}
 
-        # Persistencia de datos
-        self.persist    =
-
-        # Estado del clima
-        self.safe   = True
-
-        # Servicios activos
-        self.service_weather        = False
-        self.service_spectacle      = False
-        self.service_removal        = False
-
-        # Iniciar servicios
-        threading.Thread(target = self.start_weather_service, args = ()).start()
-
-    def start_weather_service():
-        self.service_weather = True
-        while self.service_weather:
-            try:
-                with open(SETTINGS["engine"]["weather"], "r") as source:
-                    data = json.loads(source.read())
-                    response = requests.get(f"https://api.openweathermap.org/data/2.5/weather?q={data['city']}&appid={data['key']}")
-                    temperature = response.json()["main"]["temp"]
-                    self.safe = temperature >= SETTINGS["weather"]["threshold"]
-                    if SETTINGS["debug"]:
-                        print(f"Read {temperature}ºK, weather safety set to {self.safe}")
-            except Exception as e:
-                if SETTINGS["debug"]:
-                    print("Error when connecting to OpenWeather")
-            finally:
-                time.sleep(SETTINGS["engine"]["tick"])
-
-    def add_listener(identifier):
-        listener_data = {
-            "crypto": None,
-            "position": {
-                "x": 0,
-                "y": 0
-            }
-        }
-
-        if self.listeners[identifier] is None:
-            listener_data["crypto"] = cryptography.fernet.Fernet.generate_key()
-            self.listeners[identifier] = Listener(listener["crypto"])
-
-            # Activar el dron
-            if self.figure is not None:
-                if self.figure.drones[identifier] is not None:
-                    self.listeners[identifier].active = True
-        else:
-            listener_data["crypto"] = self.listeners[identifier].crypto
-            listener_data["position"] = self.listeners[identifier].position
-
-        return listener_data
-
-@AUTHENTICATE.route("/authenticate", methods = ["GET", "POST"])
-def authenticate_drone()
+@AUTHENTICATE.route("/authenticate_drone", methods = ["GET", "POST"])
+def authenticate_drone():
     try:
         data = flask.request.get_json()
 
@@ -516,17 +553,14 @@ if __name__ == "__main__":
         quit()
 
     REGISTRY = RegistryDatabase(SETTINGS["engine"]["registry"])
+    PERSIST = PersistDatabase(SETTINGS["engine"]["persist"])
+    AUDITORY = AuditoryDatabase(SETTINGS["engine"]["auditory"])
 
     if int(sys.argv[1]) == 1:
         print("Reloading persist...")
-        ENGINE = AdvancedEngine(REGISTRY, PersistDatabase(SETTINGS["engine"]["persist"]), True)
+        ENGINE = AdvancedEngine(PERSIST, AUDITORY)
     else:
-        ENGINE = AdvancedEngine(REGISTRY, PersistDatabase(SETTINGS["engine"]["persist"]), False)
-
-    MONITOR.run(
-        host = SETTINGS["address"]["monitor"]["host"],
-        port = SETTINGS["address"]["monitor"]["port"],
-        ssl_context = (SETTINGS["engine"]["certificate"], SETTINGS["engine"]["key"]) if SETTINGS["engine"]["secure"] else None)
+        ENGINE = AdvancedEngine(PERSIST, AUDITORY)
 
     AUTHENTICATE.run(
         host = SETTINGS["address"]["authenticate"]["host"],
