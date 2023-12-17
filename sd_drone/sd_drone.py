@@ -40,18 +40,19 @@ class Drone:
         self.x = 0
         self.y = 0
 
-        # try:
-        #     threading.Thread(target = self.track_drone_list, args = ()).start()
-        #     threading.Thread(target = self.track_drone_target, args = ()).start()
-        # except Exception as e:
-        #     raise e
+    def start_services(self):
+        try:
+            threading.Thread(target = self.track_drone_list, args = ()).start()
+            threading.Thread(target = self.track_drone_target, args = ()).start()
+        except Exception as e:
+            raise e
 
     def __str__(self):
         return json.dumps({
             "identifier": self.identifier,
             "alias": self.alias,
             "password": self.password,
-            "crypto": self.crypto.decode(),
+            "crypto": self.crypto.decode(SETTINGS["message"]["codification"]),
             "position": {
                 "x": self.x,
                 "y": self.y
@@ -81,7 +82,7 @@ class Drone:
             response = requests.post(api, json = {"identifier": self.identifier, "password": self.password, "token": token}, verify = False)
             if response.status_code == 200:
                 data = response.json()
-                self.crypto = data["crypto"].encode()
+                self.crypto = bytes(data["crypto"], "utf-8")
                 self.x = data["position"]["x"]
                 self.y = data["position"]["y"]
                 return True
@@ -102,41 +103,44 @@ class Drone:
         fernet = Fernet(self.crypto)
 
         consumer = kafka.KafkaConsumer(
-            bootstrap_servers = [str(SETTINGS["adress"]["broker"]["host"]) + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+            bootstrap_servers = [str(SETTINGS["address"]["broker"]["host"]) + ":" + str(SETTINGS["address"]["broker"]["port"])])
         consumer.assign([kafka.TopicPartition("drone_list", self.identifier)])
 
         for message in consumer:
             try:
                 data = json.loads(fernet.decrypt(message).decode(SETTINGS["message"]["codification"]))
 
-                print("\033c", end = "")
+                if not SETTINGS["debug"]:
+                    print("\033c", end = "")
                 print(f"Drone <{self.identifier}> with alias <{self.alias}> is currently at ({self.x}, {self.y})")
                 print(data["map"])
             except Exception as e:
                 # Error al desencriptar el mensaje
+                raise e
                 print(f"Couldn't decrypt message, incorrect token ({str(e)})")
                 break
 
     def track_drone_target(self):
         fernet = Fernet(self.crypto)
 
-        consumer_drone_target = kafka.KafkaConsumer(
+        consumer = kafka.KafkaConsumer(
             bootstrap_servers = [str(SETTINGS["address"]["broker"]["host"]) + ":" + str(SETTINGS["address"]["broker"]["port"])])
         consumer.assign([kafka.TopicPartition("drone_target", self.identifier)])
 
         producer = kafka.KafkaProducer(
             bootstrap_servers = [str(SETTINGS["address"]["broker"]["host"]) + ":" + str(SETTINGS["address"]["broker"]["port"])],
-            value_serializer = lambda msg: fernet.encrypt(msg).encode(SETTINGS["message"]["codification"]))
+            value_serializer = lambda msg: fernet.encrypt(msg.encode("utf-8")))
 
         for message in consumer:
             try:
-                data = json.loads(fernet.decrypt(message).decode(SETTINGS["message"]["codification"]))
+                data = json.loads(fernet.decrypt(message.value))
 
                 if not self.step_toward(data):
                     print("Couldn't step towards target, out of bounds")
                 producer.send("drone_position", value = str(self), partition = self.identifier)
             except Exception as e:
                 # Error al desencriptar el mensaje
+                raise e
                 print(f"Couldn't decrypt message, incorrect token ({str(e)})")
                 break
 
@@ -172,9 +176,10 @@ if __name__ == "__main__":
             quit()
 
         print(str(DRONE))
+        DRONE.start_services()
 
     except Exception as e:
-        raise e
+        print(str(DRONE.crypto))
         print(str(e))
         print("Service stopped abruptly, shutting down")
         quit()

@@ -13,6 +13,17 @@ docker build\
     -t sd_engine\
     --build-arg RELOAD=$reload\
     ./sd_engine
+konsole\
+    &> /dev/null\
+    --hold\
+    -e\
+    watch\
+    2> /dev/null\
+    -n 1\
+    -c\
+    cat\
+    sd_volume/engine/out\
+    &
 docker run\
     --interactive\
     --tty\
@@ -25,3 +36,4 @@ docker run\
     --publish "9020:9020"\
     --publish "9030:9030"\
     sd_engine
+

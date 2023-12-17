@@ -25,7 +25,7 @@ do
         -t $container\
         --build-arg IDENTIFIER=$identifier\
         --build-arg ALIAS=$alias\
-        --build-arg TOKEN="null"\
+        --build-arg PASSWORD="drone"\
         ./sd_drone
     konsole\
         &> /dev/null\

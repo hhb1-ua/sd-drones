@@ -46,7 +46,8 @@
         "key": "certificate/domain.key",
         "figures": "engine/figures.json",
         "weather": "engine/weather.json",
-        "auditory": "engine/auditory.db"
+        "auditory": "engine/auditory.db",
+        "out": "engine/out"
     },
     "broker": {
         "partitions": 50
