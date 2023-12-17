@@ -1,14 +1,15 @@
 {
-    "adress": {
+    "debug": true,
+    "address": {
         "registry": {
             "host": "registry",
             "port": 9010
         },
-        "authentication": {
+        "authenticate": {
             "host": "engine",
             "port": 9020
         },
-        "weather": {
+        "monitor": {
             "host": "engine",
             "port": 9030
         },
@@ -27,20 +28,26 @@
         "rows": 20
     },
     "weather": {
-        "threshold": 0,
-        "tick": 2,
-        "database": "weather/weather.json"
+        "threshold": 280
     },
     "registry": {
-        "backlog": 10,
-        "database": "registry/registry.db"
+        "secure": true,
+        "database": "registry/registry.db",
+        "certificate": "certificate/domain.crt",
+        "key": "certificate/domain.key",
+        "expiration": 20
     },
     "engine": {
-        "backlog": 10,
+        "secure": true,
         "tick": 2,
         "registry": "registry/registry.db",
         "persist": "engine/persist.json",
-        "figures": "engine/figures.json"
+        "certificate": "certificate/domain.crt",
+        "key": "certificate/domain.key",
+        "figures": "engine/figures.json",
+        "weather": "engine/weather.json",
+        "auditory": "engine/auditory.db",
+        "out": "engine/out"
     },
     "broker": {
         "partitions": 50

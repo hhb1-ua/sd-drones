@@ -1,120 +1,94 @@
-import socket
 import json
-import threading
 import uuid
 import sqlite3
+import hashlib
+import datetime
+import flask
 
 SETTINGS = None
-REGISTRY = None
+DATABASE = None
+REGISTRY = flask.Flask(__name__)
 
 class Database:
     def __init__(self, path):
         self.path = path
 
-    def get_drone(self, identifier):
-        try:
-            with sqlite3.connect(self.path) as con:
-                result = con.cursor().execute(f"SELECT * FROM Registry WHERE identifier = {identifier};").fetchone()
-
-                if result is None:
-                    return None
-                return {
-                    "identifier": result[0],
-                    "alias": result[1],
-                    "token": result[2]
-                }
-        except Exception as e:
-            print(str(e))
-            return None
-
-    def delete_drone(self, identifier):
+    def insert_drone(self, identifier, alias, password):
+        password = hashlib.sha256(bytes(password, SETTINGS["message"]["codification"])).hexdigest()
         try:
             with sqlite3.connect(self.path) as con:
                 cur = con.cursor()
-                cur.execute(f"DELETE FROM Registry WHERE identifier = {identifier};")
+                cur.execute(f"INSERT INTO Drone (identifier, alias, password) VALUES ({identifier}, '{alias}', '{password}');")
                 con.commit()
                 return cur.rowcount > 0
         except Exception as e:
             print(str(e))
             return False
 
-    def insert_drone(self, identifier, alias, token):
+    def validate_drone(self, identifier, password):
+        password = hashlib.sha256(bytes(password, SETTINGS["message"]["codification"])).hexdigest()
+        try:
+            with sqlite3.connect(self.path) as con:
+                return con.cursor().execute(f"SELECT * FROM Drone WHERE identifier = {identifier} AND password = '{password}';").fetchone() is not None
+        except Exception as e:
+            print(str(e))
+            return False
+
+    def insert_token(self, token, expiration):
         try:
             with sqlite3.connect(self.path) as con:
                 cur = con.cursor()
-                cur.execute(f"INSERT INTO Registry (identifier, alias, token) VALUES ({identifier}, '{alias}', '{token}');")
+                cur.execute(f"INSERT INTO Token (token, expiration) VALUES ('{token}', '{expiration}');")
                 con.commit()
                 return cur.rowcount > 0
         except Exception as e:
             print(str(e))
             return False
 
-    def modify_drone(self, identifier, alias):
+    def validate_token(self, token):
         try:
             with sqlite3.connect(self.path) as con:
-                cur = con.cursor()
-                cur.execute(f"UPDATE Registry SET alias = '{alias}' WHERE identifier = {identifier};")
-                con.commit()
-                return cur.rowcount > 0
+                query = con.cursor().execute(f"SELECT * FROM Token WHERE token = '{token}';").fetchone()
+                if query is not None:
+                    if datetime.datetime.now() < datetime.datetime.strptime(query[1], "%Y-%m-%d %H:%M:%S.%f"):
+                        return True
+                return False
         except Exception as e:
             print(str(e))
             return False
 
-    def validate_drone(self, identifier, token):
-        try:
-            with sqlite3.connect(self.path) as con:
-                return not con.cursor().execute(f"SELECT * FROM Registry WHERE identifier = {identifier} AND token = {token};").fetchone() is None
-        except Exception as e:
-            return False
+@REGISTRY.route("/register_drone", methods = ["GET", "POST"])
+def register_drone():
+    try:
+        data = flask.request.get_json()
 
-class Registry:
-    def __init__(self, database):
-        self.database   = database
-        self.service    = False
+        if SETTINGS["debug"]:
+            print(f"Drone registry request with data ({data['identifier']}, {data['alias']}, {data['password']})")
 
-        try:
-            threading.Thread(target = self.start_service, args = ()).start()
-        except Exception as e:
-            raise e
+        if data["identifier"] is not None and data["alias"] is not None and data["password"] is not None:
+            if DATABASE.insert_drone(data["identifier"], data["alias"], data["password"]):
+                return flask.jsonify({}), 200
+        return flask.jsonify({}), 400
+    except Exception as e:
+        return flask.jsonify({}), 400
 
-    def start_service(self):
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.bind((SETTINGS["adress"]["registry"]["host"], SETTINGS["adress"]["registry"]["port"]))
-        server_socket.listen(SETTINGS["registry"]["backlog"])
+@REGISTRY.route("/request_token", methods = ["GET", "POST"])
+def request_token():
+    try:
+        data = flask.request.get_json()
 
-        self.service = True
-        while self.service:
-            client_socket, client_adress = server_socket.accept()
-            print(f"Request received from drone at {client_adress[0]}:{client_adress[1]}")
-            try:
-                self.handle_request(client_socket)
-            except Exception as e:
-                print(f"The request couldn't be handled properly ({str(e)})")
+        if SETTINGS["debug"]:
+            print(f"Token request with data ({data['identifier']}, {data['password']})")
 
-    def handle_request(self, client_socket):
-        with threading.Lock() as lock:
-            data    = json.loads(client_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
-            status  = False
-            token   = None
+        if DATABASE.validate_drone(data["identifier"], data["password"]):
+            token = str(uuid.uuid4())
+            expiration = datetime.datetime.now() + datetime.timedelta(0, SETTINGS["registry"]["expiration"])
+            if DATABASE.insert_token(token, expiration):
+                return flask.jsonify({"token": token}), 200
+        return flask.jsonify({}), 400
+    except Exception as e:
+        return flask.jsonify({}), 400
 
-            if data["operation"] == "register":
-                # Registrar a un nuevo dron
-                token = str(uuid.uuid4())
-                if self.database.insert_drone(data["identifier"], data["alias"], token):
-                    status = True
-                    print(f"Sent token <{token}> to drone <{data['alias']}>")
-            elif data["operation"] == "delete":
-                # Borrar un dron existente
-                status = self.database.delete_drone(data["identifier"])
-            elif data["operation"] == "modify":
-                # Modificar un dron existente
-                status = self.database.modify_drone(data["identifier"], data["alias"])
-
-            response = json.dumps({
-                "accepted": status,
-                "token": token})
-            client_socket.send(response.encode(SETTINGS["message"]["codification"]))
-            client_socket.close()
 
 if __name__ == "__main__":
     try:
@@ -125,8 +99,12 @@ if __name__ == "__main__":
         quit()
 
     try:
-        REGISTRY = Registry(Database(SETTINGS["registry"]["database"]))
-        print("Registry server has been successfully started")
+        DATABASE = Database(SETTINGS["registry"]["database"])
+        REGISTRY.run(
+            host = SETTINGS["address"]["registry"]["host"],
+            port = SETTINGS["address"]["registry"]["port"],
+            ssl_context = (SETTINGS["registry"]["certificate"], SETTINGS["registry"]["key"]) if SETTINGS["registry"]["secure"] else None)
     except Exception as e:
+        raise e
         print("Service stopped abruptly, shutting down")
         quit()

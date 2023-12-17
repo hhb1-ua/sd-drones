@@ -1,14 +1,12 @@
 #!/bin/bash
 start=1
 number=1
-network="sd-drones_engine-network"
 
 while getopts s:n:l: flag
 do
     case $flag in
         s) start=$OPTARG;;
         n) number=$OPTARG;;
-        l) network=$OPTARG;;
     esac
 done
 
@@ -27,7 +25,7 @@ do
         -t $container\
         --build-arg IDENTIFIER=$identifier\
         --build-arg ALIAS=$alias\
-        --build-arg TOKEN="null"\
+        --build-arg PASSWORD="drone"\
         ./sd_drone
     konsole\
         &> /dev/null\

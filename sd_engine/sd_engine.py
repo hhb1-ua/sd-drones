@@ -7,9 +7,17 @@ import datetime
 import threading
 import time
 import sqlite3
+import hashlib
+import flask
+import requests
+from cryptography.fernet import Fernet
 
-SETTINGS    = None
-ENGINE      = None
+SETTINGS        = None
+REGISTRY        = None
+AUDITORY        = None
+PERSIST         = None
+ENGINE          = None
+AUTHENTICATE    = flask.Flask(__name__)
 
 def get_figures(path):
     try:
@@ -27,18 +35,29 @@ def get_figures(path):
     except Exception as e:
         return None
 
-def fill_left(string, length):
-    return "0" * (len(string) - length) + string
-
 class RegistryDatabase:
     def __init__(self, path):
         self.path = path
 
-    def validate_drone(self, identifier, token):
+    def validate_drone(self, identifier, password):
+        password = hashlib.sha256(bytes(password, SETTINGS["message"]["codification"])).hexdigest()
         try:
             with sqlite3.connect(self.path) as con:
-                return not con.cursor().execute(f"SELECT * FROM Registry WHERE identifier = {identifier} AND token = '{token}';").fetchone() is None
+                return con.cursor().execute(f"SELECT * FROM Drone WHERE identifier = {identifier} AND password = '{password}';").fetchone() is not None
         except Exception as e:
+            raise e
+            return False
+
+    def validate_token(self, token):
+        try:
+            with sqlite3.connect(self.path) as con:
+                query = con.cursor().execute(f"SELECT * FROM Token WHERE token = '{token}';").fetchone()
+                if query is not None:
+                    if datetime.datetime.now() < datetime.datetime.strptime(query[1], "%Y-%m-%d %H:%M:%S.%f"):
+                        return True
+                return False
+        except Exception as e:
+            raise e
             return False
 
 class PersistDatabase:
@@ -50,17 +69,16 @@ class PersistDatabase:
             drones = {}
             for key in listeners:
                 drones[key] = listeners[key].to_dict()
-
             with open(self.path, "w") as data:
                 data.write(json.dumps({
                     "figure": figure,
                     "queue": queue,
                     "drones": drones,
                     "safe": safe}))
+            return True
         except Exception as e:
-            print(str(e))
-            quit()
             raise e
+            return False
 
     def load_data(self):
         try:
@@ -76,9 +94,34 @@ class PersistDatabase:
 
                 return data
         except Exception as e:
-            print(str(e))
-            quit()
+            raise e
             return None
+
+class AuditoryDatabase:
+    def __init__(self, path):
+        self.path = path
+
+    def get_total_rows(self):
+        try:
+            with sqlite3.connect(self.path) as con:
+                return con.cursor().execute("SELECT count(*) FROM Auditory;").fetchone()[0]
+        except Exception as e:
+            return None
+
+    def commit_log(self, timestamp, action, description):
+        try:
+            identifier = self.get_total_rows()
+            if identifier is None:
+                return False
+
+            with sqlite3.connect(self.path) as con:
+                cur = con.cursor()
+                cur.execute(f"INSERT INTO Auditory (identifier, stamp, action, description) VALUES ({identifier}, '{stamp}', '{action}', '{description}');")
+                con.commit()
+                return cur.rowcount > 0
+        except Exception as e:
+            raise e
+            return False
 
 class Figure:
     def __init__(self, name = ""):
@@ -102,15 +145,17 @@ class Figure:
         return self
 
 class Listener:
-    def __init__(self):
+    def __init__(self, crypto):
         # Información del dron
         self.position   = {"x": 0, "y": 0}
 
         # Información de escucha
         self.timestamp  = None
+        self.crypto     = crypto
         self.alive      = True
         self.active     = False
         self.positioned = False
+        self.usable     = True
 
         self.stamp()
 
@@ -133,131 +178,93 @@ class Listener:
         self.active = listener["active"]
         self.positioned = listener["positioned"]
 
-class Engine:
-    def __init__(self, database_registry, database_persist, reload_backup = False):
-        self.figure     = None
-        self.queue      = []
-        self.listeners  = {}
-
-        # Bases de datos
-        self.database_registry   = database_registry
-        self.database_persist    = database_persist
-
-        # Servicio de clima
-        self.safe   = True
-        self.alive  = True
-        self.stamp  = datetime.datetime.now()
+class AdvancedEngine:
+    def __init__(self, persist, auditory, out):
+        self.figure = None
+        self.queue = []
+        self.listeners = {}
+        self.persist = persist
+        self.auditory = auditory
+        self.safe = True
+        self.alive = True
+        self.out = out
+        self.buff = ""
 
         # Servicios activos
-        self.service_authentication = False
-        self.service_weather        = False
-        self.service_spectacle      = False
-        self.service_removal        = False
+        self.service_weather = False
+        self.service_spectacle = False
+        self.service_removal = False
 
-        self.set_partitions("drone_position", SETTINGS["broker"]["partitions"])
-        self.set_partitions("drone_target", SETTINGS["broker"]["partitions"])
-        self.set_partitions("drone_list", 1)
+        # Productores y consumidores de Kafka
+        self.producer = kafka.KafkaProducer(
+            bootstrap_servers = [str(SETTINGS["address"]["broker"]["host"]) + ":" + str(SETTINGS["address"]["broker"]["port"])])
+        self.consumer = kafka.KafkaConsumer(
+            "drone_position",
+            bootstrap_servers = [SETTINGS["address"]["broker"]["host"] + ":" + str(SETTINGS["address"]["broker"]["port"])])
 
-        # Recargar información previa
-        if reload_backup:
-            data = self.database_persist.load_data()
+    def output(self):
+        try:
+            with open(self.out, "w") as outf:
+                outf.write(self.buff)
+                self.buff = ""
+        except Exception as e:
+            raise e
 
-            self.figure     = Figure().from_dict(data["figure"]) if data["figure"] is not None else None
-            self.queue      = list(map(lambda x: Figure().from_dict(x), data["queue"]))
-            self.listeners  = data["listeners"]
-            self.safe       = data["safe"]
+    def run_services(self):
+        if not self.service_weather:
+            threading.Thread(target = self.start_weather_service, args = ()).start()
 
-        threading.Thread(target = self.start_authentication_service, args = ()).start()
-        threading.Thread(target = self.start_weather_service, args = ()).start()
-        threading.Thread(target = self.start_removal_service, args = ()).start()
-        threading.Thread(target = self.start_spectacle_service, args = ()).start()
-        threading.Thread(target = self.track_weather_timeout, args = ()).start()
+        if not self.service_removal:
+            threading.Thread(target = self.start_removal_service, args = ()).start()
+
+        if not self.service_spectacle:
+            threading.Thread(target = self.start_spectacle_service, args = ()).start()
 
     def start_weather_service(self):
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.bind((SETTINGS["adress"]["weather"]["host"], SETTINGS["adress"]["weather"]["port"]))
-        server_socket.listen(SETTINGS["engine"]["backlog"])
-
         self.service_weather = True
         while self.service_weather:
-            weather_socket, weather_adress = server_socket.accept()
-            print(f"Request received from weather server at {weather_adress[0]}:{weather_adress[1]}")
             try:
-                with threading.Lock() as lock:
-                    self.safe = json.loads(weather_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))["safe"]
-                    self.stamp = datetime.datetime.now()
+                with open(SETTINGS["engine"]["weather"], "r") as source:
+                    data = json.loads(source.read())
+                    response = requests.get(f"https://api.openweathermap.org/data/2.5/weather?q={data['city']}&appid={data['key']}")
+                    temperature = response.json()["main"]["temp"]
+                    self.safe = temperature >= SETTINGS["weather"]["threshold"]
+                    self.alive = True
             except Exception as e:
-                print(f"The request couldn't be handled properly ({str(e)})")
-            finally:
-                weather_socket.close()
-
-    def track_weather_timeout(self):
-        while self.service_weather:
-            time_elapsed = (datetime.datetime.now() - self.stamp).total_seconds()
-
-            if self.alive and time_elapsed > SETTINGS["message"]["timeout"]:
                 self.alive = False
-                self.safe = False
-            elif not self.alive and time_elapsed <= SETTINGS["message"]["timeout"]:
-                self.alive = True
+            finally:
+                time.sleep(SETTINGS["engine"]["tick"])
+
+    def start_removal_service(self):
+        self.service_removal = True
+        while self.service_removal:
+            current_time = datetime.datetime.now()
+
+            for key in self.listeners:
+                time_elapsed = (current_time - self.listeners[key].timestamp).total_seconds()
+
+                if self.listeners[key].alive:
+                    if time_elapsed > SETTINGS["message"]["timeout"]:
+                        self.listeners[key].alive = False
+                else:
+                    if time_elapsed <= SETTINGS["message"]["timeout"]:
+                        self.listeners[key].alive = True
 
             time.sleep(SETTINGS["engine"]["tick"])
 
-    def start_authentication_service(self):
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.bind((SETTINGS["adress"]["authentication"]["host"], SETTINGS["adress"]["authentication"]["port"]))
-        server_socket.listen(SETTINGS["engine"]["backlog"])
-
-        self.service_authentication = True
-        while self.service_authentication:
-            drone_socket, drone_adress = server_socket.accept()
-            print(f"Request received from drone at {drone_adress[0]}:{drone_adress[1]}")
-            try:
-                with threading.Lock():
-                    data = json.loads(drone_socket.recv(SETTINGS["message"]["length"]).decode(SETTINGS["message"]["codification"]))
-
-                    status = False
-                    position = {"x": 0, "y": 0}
-
-                    if self.database_registry.validate_drone(data["identifier"], data["token"]):
-                        if self.add_listener(data["identifier"], Listener()):
-                            # El dron no se había conectado previamente
-                            status = True
-                            # Figura en progreso, comprobar si se debe activar el dron
-                            if self.figure is not None:
-                                if self.figure.drones.get(data["identifier"]) is not None:
-                                    self.listeners[data["identifier"]].active = True
-                        else:
-                            # El dron ya existía y se está reconectando
-                            status = True
-                            position = self.listeners[data["identifier"]].position
-
-                    drone_socket.send(json.dumps({"accepted": status, "position": position}).encode(SETTINGS["message"]["codification"]))
-            except Exception as e:
-                print(f"The request couldn't be handled properly ({str(e)})")
-            finally:
-                drone_socket.close()
-
     def start_spectacle_service(self):
-        BROKER_ADRESS = SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])
-
-        producer = kafka.KafkaProducer(
-            bootstrap_servers = [BROKER_ADRESS],
-            value_serializer = lambda msg: json.dumps(msg).encode(SETTINGS["message"]["codification"]))
-
         threading.Thread(target = self.track_drone_position, args = ()).start()
 
         self.service_spectacle = True
         while self.service_spectacle:
-            print("\033c", end = "")
-
             # Leer el archivo de figuras
             if self.figure is None and len(self.queue) == 0:
-                print("Awaiting for 'figures.json' file")
+                self.buff += "Awaiting for 'figures.json' file\n"
                 figures = get_figures(SETTINGS["engine"]["figures"])
                 if figures is not None:
                     self.queue = figures
-                self.publish_drone_target(producer)
+                self.publish_drone_target()
+
             # Ejecutar las figuras
             else:
                 # Avanzar en la cola
@@ -270,12 +277,12 @@ class Engine:
                         else:
                             self.listeners[key].active = False
 
-                self.publish_drone_list(producer)
-                self.publish_drone_target(producer)
+                self.publish_drone_list()
+                self.publish_drone_target()
 
                 # Imprimir mapa e información
-                print(f"Printing figure <{self.figure.name}>")
-                print(str(self))
+                self.buff += f"Printing figure <{self.figure.name}>\n"
+                self.buff += str(self)
 
                 # Comprobar si la figura ha acabado
                 finished = True
@@ -291,8 +298,8 @@ class Engine:
             if not self.safe:
                 weather = "DANGEROUS"
             if not self.alive:
-                weather = "UNKNOWN"
-            print(f"Weather status: {weather}")
+                weather = "DISCONNECTED"
+            self.buff += f"Weather status: {weather}\n"
 
             # Imprimir la lista de drones
             for key in self.listeners:
@@ -301,15 +308,18 @@ class Engine:
                 status = "ALIVE"
                 if not listener.alive:
                     status = "DEAD"
+                if not listener.usable:
+                    status = "CORRUPTED"
 
-                key = fill_left(str(key), 2)
-                p_x = fill_left(str(listener.position["x"]), 2)
-                p_y = fill_left(str(listener.position["y"]), 2)
+                key = str(key)
+                p_x = str(listener.position["x"])
+                p_y = str(listener.position["y"])
+                self.buff += f"<{key}> ({p_x}, {p_y}) {status}, "
 
-                print(f"<{key}> ({p_x}, {p_y}) {status}")
+            self.output()
 
             # Hacer una copia de seguridad
-            self.database_persist.save_data(
+            self.persist.save_data(
                 self.figure.to_dict() if self.figure != None else None,
                 list(map(lambda x: x.to_dict(), self.queue)),
                 self.listeners,
@@ -317,74 +327,85 @@ class Engine:
 
             time.sleep(SETTINGS["engine"]["tick"])
 
-    def publish_drone_list(self, producer):
-        producer.send("drone_list", value = {"map": str(self)})
+    def add_listener(self, identifier):
+        data = {
+            "crypto": None,
+            "position": {
+                "x": 0,
+                "y": 0
+            }
+        }
 
-    def publish_drone_target(self, producer):
+        if self.listeners.get(identifier) is None:
+            crypto = Fernet.generate_key()
+            self.listeners[identifier] = Listener(crypto)
+            data["crypto"] = crypto.decode()
+
+            # Activar el dron
+            if self.figure is not None:
+                if self.figure.drones.get(identifier) is not None:
+                    self.listeners[identifier].active = True
+        else:
+            data["crypto"] = self.listeners[identifier].crypto.decode()
+            data["position"] = self.listeners[identifier].position
+
+        return data
+
+    def publish_drone_target(self):
         for key in self.listeners:
+            fernet = Fernet(self.listeners[key].crypto)
             target = {"x": 0, "y": 0}
 
-            if not self.figure is None and self.safe:
+            if self.figure is not None and self.safe:
                 if self.listeners[key].active:
-                    if self.figure.drones.get(key) is not None:
+                    if self.figure.drones[key] is not None:
                         target = self.figure.drones[key]
 
-            producer.send("drone_target", value = target, partition = key)
+            self.producer.send(
+                "drone_target",
+                value = fernet.encrypt(json.dumps(target).encode("utf-8")),
+                partition = key)
+
+    def publish_drone_list(self):
+        for key in self.listeners:
+            fernet = Fernet(self.listeners[key].crypto)
+            self.producer.send(
+                "drone_list",
+                value = fernet.encrypt(json.dumps({"map": str(self)}).encode("utf-8")),
+                partition = key)
 
     def track_drone_position(self):
-        consumer = kafka.KafkaConsumer(
-            "drone_position",
-            bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])],
-            value_deserializer = lambda msg: json.loads(msg.decode(SETTINGS["message"]["codification"])))
+        for message in self.consumer:
+            key = message.partition
 
-        for message in consumer:
-            listener_key = message.value["identifier"]
+            if self.listeners[key] is not None:
+                fernet = Fernet(self.listeners[key].crypto)
 
-            if self.listeners.get(listener_key) is not None:
-                self.listeners[listener_key].stamp()
-                self.listeners[listener_key].position = message.value["position"]
+                try:
+                    data = json.loads(fernet.decrypt(message.value))
 
-                if self.figure is not None and self.listeners[listener_key].active:
-                    self.listeners[listener_key].positioned = message.value["position"] == self.figure.drones[listener_key]
-                else:
-                    self.listeners[listener_key].positioned = False
+                    self.listeners[key].stamp()
+                    self.listeners[key].position = data["position"]
 
-    def start_removal_service(self):
-        self.service_removal = True
-        while self.service_removal:
-            current_time = datetime.datetime.now()
-
-            for key in self.listeners:
-                time_elapsed = (current_time - self.listeners[key].timestamp).total_seconds()
-
-                if self.listeners[key].alive:
-                    if time_elapsed > SETTINGS["message"]["timeout"]:
-                        print(f"Connection lost to drone with identifier <{key}>")
-                        self.listeners[key].alive = False
-                else:
-                    if time_elapsed <= SETTINGS["message"]["timeout"]:
-                        print(f"Connection established to drone with identifier <{key}>")
-                        self.listeners[key].alive = True
-
-            time.sleep(SETTINGS["engine"]["tick"])
-
-    def add_listener(self, key, listener):
-        if self.listeners.get(key) is not None:
-            return False
-        self.listeners[key] = listener
-        return True
+                    if self.figure is not None and self.listeners[key].active:
+                        self.listeners[key].positioned = data["position"] == self.figure.drones[key]
+                    else:
+                        self.listeners[key].positioned = False
+                except Exception as e:
+                    # Los datos no se pueden desencriptar
+                    raise e
+                    self.listeners[key].active = False
+                    self.listeners[key].usable = False
 
     def get_partitions(self, topic):
         try:
-            consumer = kafka.KafkaConsumer(
-                bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
-            return len(consumer.partitions_for_topic(topic))
+            return len(self.consumer.partitions_for_topic(topic))
         except:
             return None
 
     def set_partitions(self, topic, number):
         admin = kafka.KafkaAdminClient(
-            bootstrap_servers = [SETTINGS["adress"]["broker"]["host"] + ":" + str(SETTINGS["adress"]["broker"]["port"])])
+            bootstrap_servers = [SETTINGS["address"]["broker"]["host"] + ":" + str(SETTINGS["address"]["broker"]["port"])])
         current_partitions = self.get_partitions(topic)
 
         if current_partitions is None:
@@ -441,6 +462,29 @@ class Engine:
 
         return result
 
+
+@AUTHENTICATE.route("/authenticate_drone", methods = ["GET", "POST"])
+def authenticate_drone():
+    try:
+        data = flask.request.get_json()
+
+        if SETTINGS["debug"]:
+            print(f"Drone authentication request with data ({data['identifier']}, {data['password']}, {data['token']})")
+
+        if data["identifier"] is not None and data["password"] is not None and data["token"] is not None:
+            if REGISTRY.validate_drone(data["identifier"], data["password"]) and REGISTRY.validate_token(data["token"]):
+                data = ENGINE.add_listener(data["identifier"])
+                print(data)
+                return flask.jsonify(data), 200
+            else:
+                print("Validation error")
+        else:
+            print("Data error")
+        return flask.jsonify({}), 400
+    except Exception as e:
+        raise e
+        return flask.jsonify({}), 400
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <reload>")
@@ -453,8 +497,23 @@ if __name__ == "__main__":
         print("Could not load settings file 'settings.json', shutting down")
         quit()
 
+    REGISTRY = RegistryDatabase(SETTINGS["engine"]["registry"])
+    PERSIST = PersistDatabase(SETTINGS["engine"]["persist"])
+    AUDITORY = AuditoryDatabase(SETTINGS["engine"]["auditory"])
+
     if int(sys.argv[1]) == 1:
         print("Reloading persist...")
-        ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]), True)
+        ENGINE = AdvancedEngine(PERSIST, AUDITORY, SETTINGS["engine"]["out"])
     else:
-        ENGINE = Engine(RegistryDatabase(SETTINGS["engine"]["registry"]), PersistDatabase(SETTINGS["engine"]["persist"]), False)
+        ENGINE = AdvancedEngine(PERSIST, AUDITORY, SETTINGS["engine"]["out"])
+
+    ENGINE.set_partitions("drone_position", SETTINGS["broker"]["partitions"])
+    ENGINE.set_partitions("drone_target", SETTINGS["broker"]["partitions"])
+    ENGINE.set_partitions("drone_list", SETTINGS["broker"]["partitions"])
+    ENGINE.run_services()
+
+    AUTHENTICATE.run(
+        host = SETTINGS["address"]["authenticate"]["host"],
+        port = SETTINGS["address"]["authenticate"]["port"],
+        ssl_context = (SETTINGS["engine"]["certificate"], SETTINGS["engine"]["key"]) if SETTINGS["engine"]["secure"] else None)
+

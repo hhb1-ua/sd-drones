@@ -17,14 +17,23 @@ konsole\
     &> /dev/null\
     --hold\
     -e\
-    docker run\
-    --name "sd_engine"\
+    watch\
+    2> /dev/null\
+    -n 1\
+    -c\
+    cat\
+    sd_volume/engine/out\
+    &
+docker run\
+    --interactive\
+    --tty\
     --volume "$(pwd)/sd_volume/settings/":"/app/settings/"\
     --volume "$(pwd)/sd_volume/registry/":"/app/registry/"\
     --volume "$(pwd)/sd_volume/engine/":"/app/engine/"\
+    --volume "$(pwd)/sd_volume/certificate/":"/app/certificate/"\
     --network sd-drones_engine-network\
     --network-alias engine\
     --publish "9020:9020"\
     --publish "9030:9030"\
-    sd_engine\
-    &
+    sd_engine
+
