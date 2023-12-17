@@ -299,7 +299,7 @@ class AdvancedEngine:
                 weather = "DANGEROUS"
             if not self.alive:
                 weather = "DISCONNECTED"
-            self.buff = f"Weather status: {weather}\n"
+            self.buff += f"Weather status: {weather}\n"
 
             # Imprimir la lista de drones
             for key in self.listeners:

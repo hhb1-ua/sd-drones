@@ -108,7 +108,7 @@ class Drone:
 
         for message in consumer:
             try:
-                data = json.loads(fernet.decrypt(message).decode(SETTINGS["message"]["codification"]))
+                data = json.loads(fernet.decrypt(message.value).decode(SETTINGS["message"]["codification"]))
 
                 if not SETTINGS["debug"]:
                     print("\033c", end = "")
