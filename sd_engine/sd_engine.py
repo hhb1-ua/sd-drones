@@ -108,7 +108,7 @@ class AuditoryDatabase:
         except Exception as e:
             return None
 
-    def commit_log(self, timestamp, action, description):
+    def commit_log(self, stamp, action, description):
         try:
             identifier = self.get_total_rows()
             if identifier is None:
@@ -231,6 +231,10 @@ class AdvancedEngine:
                     self.safe = temperature >= SETTINGS["weather"]["threshold"]
                     self.alive = True
             except Exception as e:
+                AUDITORY.commit_log(
+                    datetime.datetime.now(),
+                    "Weather unreachable",
+                    "N/A")
                 self.alive = False
             finally:
                 time.sleep(SETTINGS["engine"]["tick"])
@@ -245,6 +249,11 @@ class AdvancedEngine:
 
                 if self.listeners[key].alive:
                     if time_elapsed > SETTINGS["message"]["timeout"]:
+                        if self.listeners[key].alive:
+                            AUDITORY.commit_log(
+                                datetime.datetime.now(),
+                                "Unreachable drone",
+                                f"IDENTIFIER: {key}")
                         self.listeners[key].alive = False
                 else:
                     if time_elapsed <= SETTINGS["message"]["timeout"]:
@@ -319,11 +328,11 @@ class AdvancedEngine:
             self.output()
 
             # Hacer una copia de seguridad
-            self.persist.save_data(
-                self.figure.to_dict() if self.figure != None else None,
-                list(map(lambda x: x.to_dict(), self.queue)),
-                self.listeners,
-                self.safe)
+            # self.persist.save_data(
+            #     self.figure.to_dict() if self.figure != None else None,
+            #     list(map(lambda x: x.to_dict(), self.queue)),
+            #     self.listeners,
+            #     self.safe)
 
             time.sleep(SETTINGS["engine"]["tick"])
 
@@ -378,24 +387,27 @@ class AdvancedEngine:
         for message in self.consumer:
             key = message.partition
 
-            if self.listeners[key] is not None:
-                fernet = Fernet(self.listeners[key].crypto)
+            if self.listeners.get(key) is not None:
+                if self.listeners[key].usable:
+                    try:
+                        fernet = Fernet(self.listeners[key].crypto)
+                        data = json.loads(fernet.decrypt(message.value))
 
-                try:
-                    data = json.loads(fernet.decrypt(message.value))
+                        self.listeners[key].stamp()
+                        self.listeners[key].position = data["position"]
 
-                    self.listeners[key].stamp()
-                    self.listeners[key].position = data["position"]
-
-                    if self.figure is not None and self.listeners[key].active:
-                        self.listeners[key].positioned = data["position"] == self.figure.drones[key]
-                    else:
-                        self.listeners[key].positioned = False
-                except Exception as e:
-                    # Los datos no se pueden desencriptar
-                    raise e
-                    self.listeners[key].active = False
-                    self.listeners[key].usable = False
+                        if self.figure is not None and self.listeners[key].active:
+                            self.listeners[key].positioned = data["position"] == self.figure.drones[key]
+                        else:
+                            self.listeners[key].positioned = False
+                    except Exception as e:
+                        # Los datos no se pueden desencriptar
+                        self.listeners[key].active = False
+                        self.listeners[key].usable = False
+                        AUDITORY.commit_log(
+                            datetime.datetime.now(),
+                            "Problematic encoding",
+                            f"IDENTIFIER: {key}")
 
     def get_partitions(self, topic):
         try:
@@ -472,17 +484,36 @@ def authenticate_drone():
             print(f"Drone authentication request with data ({data['identifier']}, {data['password']}, {data['token']})")
 
         if data["identifier"] is not None and data["password"] is not None and data["token"] is not None:
-            if REGISTRY.validate_drone(data["identifier"], data["password"]) and REGISTRY.validate_token(data["token"]):
-                data = ENGINE.add_listener(data["identifier"])
-                print(data)
-                return flask.jsonify(data), 200
+            if REGISTRY.validate_drone(data["identifier"], data["password"]):
+                if REGISTRY.validate_token(data["token"]):
+                    data = ENGINE.add_listener(data["identifier"])
+                    AUDITORY.commit_log(
+                        datetime.datetime.now(),
+                        "Successful authentication",
+                        f"ADDRESS: {flask.request.remote_addr}")
+                    return flask.jsonify(data), 200
+                else:
+                    AUDITORY.commit_log(
+                        datetime.datetime.now(),
+                        "Failed token validation",
+                        f"ADDRESS: {flask.request.remote_addr}")
             else:
-                print("Validation error")
+                AUDITORY.commit_log(
+                    datetime.datetime.now(),
+                    "Failed user validation",
+                    f"ADDRESS: {flask.request.remote_addr}")
         else:
-            print("Data error")
+            AUDITORY.commit_log(
+                    datetime.datetime.now(),
+                    "Corrupted data",
+                    f"ADDRESS: {flask.request.remote_addr}")
         return flask.jsonify({}), 400
     except Exception as e:
         raise e
+        AUDITORY.commit_log(
+            datetime.datetime.now(),
+            "Corrupted data",
+            f"ADDRESS: {flask.request.remote_addr}")
         return flask.jsonify({}), 400
 
 if __name__ == "__main__":

@@ -162,9 +162,7 @@ if __name__ == "__main__":
     try:
         DRONE = Drone(int(sys.argv[1]), str(sys.argv[2]), str(sys.argv[3]))
 
-        if not DRONE.register_drone():
-            print("Couldn't register drone, shutting down")
-            quit()
+        DRONE.register_drone()
 
         token = DRONE.request_token()
         if token is None:

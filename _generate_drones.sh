@@ -13,30 +13,14 @@ done
 for i in `seq $start $[$start + $number - 1]`
 do
     # Argumentos del dron
-    container="ct_autodrone_$i"
     identifier=$i
     alias="autodrone_$i"
+    password="user"
 
     # Construir y ejecutar en una nueva ventana
-    docker\
-        &> /dev/null\
-        build\
-        --rm\
-        -t $container\
-        --build-arg IDENTIFIER=$identifier\
-        --build-arg ALIAS=$alias\
-        --build-arg PASSWORD="drone"\
-        ./sd_drone
-    konsole\
-        &> /dev/null\
-        --hold\
-        -e\
-        docker run\
-        --rm\
-        --volume "$(pwd)/sd_volume/settings/":"/app/settings/"\
-        --network $network\
-        --network-alias $alias\
-        --publish-all\
-        $container\
-        &
+    bash\
+        _start_drone.sh\
+        $identifier\
+        $alias\
+        $password
 done
