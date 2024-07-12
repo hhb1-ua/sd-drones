@@ -1,4 +1,5 @@
 {
     "city": "Alicante",
-    "key": "0239bb2c14b178c18ccad288d02a9efd"
+    "key": "0239bb2c14b178c18ccad288d02a9efd",
+    "_comment_": "Keep in mind that this is a dummy key, it won't work when deployed"
 }
